@@ -6,10 +6,7 @@ import { cnOrdinal, todayStr } from '../services/geo'
 import { uid } from '../services/id'
 import { DAY_COLORS, KIND_META } from '../constants'
 import { SAMPLE_DAYS, SAMPLE_TITLE } from '../sample'
-
-const LS_TRIPS = 'lushu.trips.v2' // 路书库
-const LS_TRIP_V1 = 'lushu.trip.v1' // 旧版单路书，仅用于迁移
-const LS_MAPCFG = 'lushu.mapcfg.v1'
+import { api } from '../services/api'
 
 function emptyDay(): Day {
   return { id: uid('day'), departTime: '08:00', startAuto: true, stops: [], note: '' }
@@ -72,7 +69,8 @@ export const useTripStore = defineStore('trip', () => {
     key: '',
     securityJsCode: '',
   })
-  const gateOpen = ref(false) // 从顶栏主动打开数据源选择页
+  const hasAmapKey = ref(false) // 服务端是否已配置高德 Key
+  const adminOpen = ref(false) // 管理后台页（仅管理员可见入口）
   const mapOpen = ref(false) // 移动端：地图按需全屏展开（桌面端地图常驻，不受影响）
   const pickerOpen = ref(false) // 「添加节点」全屏选点页：上搜索、背后地图
   const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
@@ -85,47 +83,47 @@ export const useTripStore = defineStore('trip', () => {
     toastTimer = window.setTimeout(() => (toast.value = null), 3500)
   }
 
-  // ───────────────────────── 初始化 / 持久化 ─────────────────────────
-  function init() {
-    try {
-      const saved = JSON.parse(localStorage.getItem(LS_MAPCFG) || 'null')
-      if (saved?.provider) {
-        mapCfg.provider = saved.provider
-        mapCfg.key = saved.key || ''
-        mapCfg.securityJsCode = saved.securityJsCode || ''
-      }
-    } catch { /* 忽略损坏数据 */ }
+  // ───────────────────────── 服务端数据加载 / 持久化 ─────────────────────────
+  /** 登录后加载：服务端地图配置 + 当前用户的全部路书 */
+  async function loadAll() {
+    const cfg = await api.getConfig()
+    mapCfg.key = cfg.amapKey || ''
+    mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
+    hasAmapKey.value = cfg.hasAmapKey
+    const saved = localStorage.getItem('lushu.provider')
+    mapCfg.provider =
+      saved === 'amap' && cfg.hasAmapKey ? 'amap' : saved === 'osm' ? 'osm' : (cfg.defaultProvider as MapProvider)
     mapSvc.setProvider(mapCfg.provider)
 
-    try {
-      const saved = JSON.parse(localStorage.getItem(LS_TRIPS) || 'null')
-      if (Array.isArray(saved)) savedTrips.list = saved.filter((e: any) => e?.trip?.days?.length).map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
-    } catch { /* 忽略损坏数据 */ }
-    // 旧版（单路书）数据迁移
-    if (!savedTrips.list.length) {
-      try {
-        const legacy = JSON.parse(localStorage.getItem(LS_TRIP_V1) || 'null')
-        if (legacy?.trip?.days?.length) {
-          savedTrips.list = [{ id: uid('trip'), savedAt: Date.now(), trip: migrateTrip(legacy.trip) }]
-          persistTrips()
-        }
-      } catch { /* 忽略损坏数据 */ }
-    }
+    const data = await api.getTrips()
+    savedTrips.list = (data.trips || [])
+      .filter((e: any) => e?.trip?.days?.length)
+      .map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
+  }
+
+  /** 退出登录时清空会话内数据 */
+  function reset() {
+    trip.value = null
+    currentId.value = null
+    page.value = 'home'
+    view.value = 'overview'
+    savedTrips.list.splice(0)
+    Object.keys(legDistances).forEach((k) => delete legDistances[k])
+    Object.keys(legPaths).forEach((k) => delete legPaths[k])
+    mapCfg.key = ''
+    mapCfg.securityJsCode = ''
+    mapCfg.provider = 'osm'
+    hasAmapKey.value = false
+    adminOpen.value = false
+    pickerOpen.value = false
+    pickerResults.value = []
+    mapOpen.value = false
   }
 
   let saveTimer = 0
   function save() {
     window.clearTimeout(saveTimer)
     saveTimer = window.setTimeout(saveNow, 400)
-  }
-
-  function persistTrips(): boolean {
-    try {
-      localStorage.setItem(LS_TRIPS, JSON.stringify(savedTrips.list))
-      return true
-    } catch {
-      return false
-    }
   }
 
   function saveNow() {
@@ -135,16 +133,32 @@ export const useTripStore = defineStore('trip', () => {
     const i = savedTrips.list.findIndex((e) => e.id === entry.id)
     if (i >= 0) savedTrips.list.splice(i, 1, entry)
     else savedTrips.list.unshift(entry)
-    if (!persistTrips()) notify('浏览器本地存储空间不足，修改可能未被保存', 'error')
+    api.putTrip(entry).catch((e) => notify(e?.message || '保存到服务端失败', 'error'))
   }
 
   // ───────────────────────── 数据源管理（开源 OSM / 高德） ─────────────────────────
 
-  function persistMapCfg() {
-    localStorage.setItem(
-      LS_MAPCFG,
-      JSON.stringify({ provider: mapCfg.provider, key: mapCfg.key, securityJsCode: mapCfg.securityJsCode }),
-    )
+  /** 应用服务端下发的地图配置（管理后台保存后调用） */
+  function applyServerConfig(cfg: { amapKey: string; amapSecurityJsCode: string; defaultProvider: string }) {
+    mapCfg.key = cfg.amapKey || ''
+    mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
+    hasAmapKey.value = !!mapCfg.key
+    if (mapCfg.provider === 'amap' && !hasAmapKey.value) {
+      // 高德 Key 被移除：回退开源并重算
+      applyProvider('osm', '', '')
+      return
+    }
+    applyProvider(mapCfg.provider, mapCfg.key, mapCfg.securityJsCode)
+  }
+
+  /** 顶栏「数据源」：在开源 / 高德之间直接切换（高德需服务端已配置 Key） */
+  function toggleProvider() {
+    const next: MapProvider = mapCfg.provider === 'osm' ? 'amap' : 'osm'
+    if (next === 'amap' && !hasAmapKey.value) {
+      notify('管理员尚未在后台配置高德 Key，暂无法使用高德地图', 'error')
+      return
+    }
+    applyProvider(next, mapCfg.key, mapCfg.securityJsCode)
   }
 
   /** 选择地图数据源。两种地图坐标系不同（WGS-84 / GCJ-02），切换后旧线路作废并全部重算。 */
@@ -153,9 +167,8 @@ export const useTripStore = defineStore('trip', () => {
     mapCfg.provider = provider
     mapCfg.key = key.trim()
     mapCfg.securityJsCode = securityJsCode.trim()
-    gateOpen.value = false
+    localStorage.setItem('lushu.provider', provider)
     mapSvc.setProvider(provider)
-    persistMapCfg()
     if (changed) {
       // 坐标系不同，旧的车行线路/距离不可混用
       Object.keys(legDistances).forEach((k) => delete legDistances[k])
@@ -237,7 +250,7 @@ export const useTripStore = defineStore('trip', () => {
     const title = savedTrips.list[i].trip.title
     if (!window.confirm(`删除「${title}」？此操作不可恢复。`)) return
     savedTrips.list.splice(i, 1)
-    if (!persistTrips()) notify('本地存储写入失败，请重试', 'error')
+    api.deleteTrip(id).catch((e) => notify(e?.message || '服务端删除失败', 'error'))
     if (currentId.value === id) {
       trip.value = null
       currentId.value = null
@@ -605,10 +618,10 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, gateOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legPaths,
     tripSummaries,
-    init, notify, save, saveNow,
-    applyProvider, retryLegs,
+    init: loadAll, notify, save, saveNow, reset,
+    applyProvider, applyServerConfig, toggleProvider, retryLegs,
     createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay,
     addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,

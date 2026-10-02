@@ -6,5 +6,9 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
+    // 开发模式下后端 API 走本地 3000 端口
+    proxy: {
+      '/api': 'http://localhost:3000',
+    },
   },
 })

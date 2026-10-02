@@ -2,3 +2,6 @@ node_modules/
 dist/
 *.local
 .DS_Store
+
+# 后端数据（含用户密码哈希与会话，禁止入库）
+server/data/

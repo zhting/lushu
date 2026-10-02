@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useAuthStore } from '../stores/auth'
 import { useTripStore } from '../stores/trip'
 import { todayStr } from '../services/geo'
 import { DAY_COLORS } from '../constants'
 
 const store = useTripStore()
+const auth = useAuthStore()
 const showCreate = ref(false)
 const title = ref('')
 const startDate = ref(todayStr())
@@ -38,12 +40,15 @@ function stripStyle(i: number) {
       <span class="muted">按天规划你的自驾行程</span>
       <div style="flex: 1"></div>
       <button
+        v-if="store.hasAmapKey"
         class="btn btn-mini"
-        :title="store.mapCfg.provider === 'osm' ? '当前：开源地图（OSM），点击切换' : '当前：高德地图，点击切换'"
-        @click="store.gateOpen = true"
+        :title="store.mapCfg.provider === 'osm' ? '当前：开源地图（OSM），点击切换到高德' : '当前：高德地图，点击切换到开源'"
+        @click="store.toggleProvider()"
       >
-        {{ store.mapCfg.provider === 'osm' ? '🌍 数据源' : '🇨🇳 数据源' }}
+        {{ store.mapCfg.provider === 'osm' ? '🌍 开源' : '🇨🇳 高德' }}
       </button>
+      <button v-if="auth.user?.isAdmin" class="btn btn-mini" title="管理后台" @click="store.adminOpen = true">⚙ 后台</button>
+      <button class="btn btn-mini" @click="auth.logout()">退出</button>
     </header>
 
     <div class="home-body">

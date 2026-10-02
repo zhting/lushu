@@ -908,6 +908,12 @@ input[type='date'] {
   color: var(--brand);
 }
 
+.auth-switch {
+  text-align: center;
+  margin: 14px 0 0;
+  font-size: 13px;
+}
+
 details.steps {
   margin: 12px 0;
   border: 1px solid var(--line);
