@@ -54,8 +54,8 @@ function handleAddDay() {
             <img src="/images/day_landscape.jpg" alt="山水装饰" class="day-deco-img" />
           </div>
 
-          <!-- 徽标：D1（蓝色填充）, D2（灰色） -->
-          <div class="day-pill-badge" :class="{ 'day-pill-active': store.view === d.id }">
+          <!-- 徽标：D1（正圆形亮蓝填充）, D2（灰色圆形） -->
+          <div class="day-circle-badge" :class="{ 'day-circle-active': store.view === d.id }">
             D{{ i + 1 }}
           </div>
 
@@ -70,34 +70,11 @@ function handleAddDay() {
 
           <div style="flex: 1"></div>
 
-          <!-- 操作按钮与折叠小尖角 -->
-          <div class="day-header-actions" @click.stop>
-            <div class="more-menu-wrap">
-              <button
-                class="icon-btn-ghost day-dots-btn"
-                title="更多操作"
-                @click="toggleDayMenu(d.id, $event)"
-              >
-                •••
-              </button>
-              <div v-if="activeMenuDayId === d.id" class="dropdown-popover day-popover">
-                <button class="popover-item" @click="store.showDayOnMap(d.id); activeMenuDayId = null">
-                  🗺️ 在地图上定位当天
-                </button>
-                <div class="popover-divider"></div>
-                <button
-                  class="popover-item danger-item"
-                  @click="store.deleteDay(d.id); activeMenuDayId = null"
-                >
-                  🗑️ 删除这一天
-                </button>
-              </div>
-            </div>
-
-            <!-- 收起/展开尖角箭头：设计图清晰为向上 ^ 或向下 v -->
-            <div class="toggle-arrow" :class="{ 'arrow-up': store.view === d.id }">
-              <span>{{ store.view === d.id ? '∧' : '∨' }}</span>
-            </div>
+          <!-- 折叠小尖角（设计图清晰为向上/向下细线箭头） -->
+          <div class="toggle-arrow" :class="{ 'arrow-up': store.view === d.id }">
+            <svg class="chevron-svg" viewBox="0 0 20 20" fill="currentColor">
+              <path fill-rule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clip-rule="evenodd" />
+            </svg>
           </div>
         </div>
 

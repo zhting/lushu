@@ -81,25 +81,23 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
       <div class="trip-page-layout">
         <!-- 沉浸式顶部风景 Header -->
         <header class="immersive-trip-header">
-          <img src="/images/trip_cover.jpg" alt="行程背景" class="header-bg-image" />
+          <img src="/images/hero_banner.jpg" alt="行程背景" class="header-bg-image" />
           <div class="header-gradient-mask"></div>
 
-          <!-- 顶部快捷操作栏 -->
+          <!-- 顶部快捷操作栏（中间留空透出湖山风光） -->
           <div class="immersive-top-nav">
             <button class="glass-circle-btn" title="返回路书列表" @click="store.goHome()">
               ‹
             </button>
 
-            <!-- 小鹿 Mini Logo + 小鹿路书 -->
-            <div class="header-center-brand">
-              <img src="/images/logo.png" alt="Logo" class="mini-brand-logo" />
-              <span class="mini-brand-name">小鹿路书</span>
-            </div>
-
             <!-- 分享导出与三点菜单 -->
             <div class="header-right-actions" @click.stop>
               <button class="glass-circle-btn" title="导出 JSON" @click="handleExport">
-                ⎘
+                <svg class="share-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
+                  <polyline points="16 6 12 2 8 6" />
+                  <line x1="12" y1="2" x2="12" y2="15" />
+                </svg>
               </button>
               <div class="relative-wrap">
                 <button
@@ -131,8 +129,12 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
             </div>
           </div>
 
-          <!-- 行程大标题与日期天数 -->
+          <!-- 行程大标题区域：品牌Logo+名称置于大标题左上方 -->
           <div v-if="store.trip" class="immersive-title-block">
+            <div class="brand-row">
+              <img src="/images/logo.png" alt="Logo" class="brand-row-logo" />
+              <span class="brand-row-text">小鹿路书</span>
+            </div>
             <h1 class="immersive-title">{{ store.trip.title }}</h1>
             <div class="immersive-sub">
               <span>📅 {{ store.trip.startDate }} · {{ store.trip.days.length }} 天</span>
@@ -140,50 +142,52 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
           </div>
         </header>
 
-        <!-- 悬浮 Tab 胶囊切换栏 -->
-        <div class="tab-capsule-bar-wrap">
-          <div class="tab-capsule-bar">
-            <button
-              class="tab-pill"
-              :class="{ active: store.page === 'trip' && !store.mapOpen }"
-              @click="handleTabClick('trip')"
-            >
-              <span class="tab-icon">☰</span>
-              <span>列表</span>
-            </button>
-            <button
-              class="tab-pill"
-              :class="{ active: store.page === 'overview' }"
-              @click="handleTabClick('overview')"
-            >
-              <span class="tab-icon">📊</span>
-              <span>总览</span>
-            </button>
-            <button
-              class="tab-pill"
-              :class="{ active: store.mapOpen }"
-              @click="handleTabClick('map')"
-            >
-              <span class="tab-icon">🗺️</span>
-              <span>地图</span>
-            </button>
-
+        <!-- 下方主体白色圆角大卡片（向上浮动覆盖在封面图底沿） -->
+        <main class="trip-main-card">
+          <!-- 悬浮 Tab 胶囊切换栏 -->
+          <div class="tab-capsule-bar-wrap">
+            <div class="tab-capsule-bar">
+              <button
+                class="tab-pill"
+                :class="{ active: store.page === 'trip' && !store.mapOpen }"
+                @click="handleTabClick('trip')"
+              >
+                <span class="tab-icon">☰</span>
+                <span>列表</span>
+              </button>
+              <button
+                class="tab-pill"
+                :class="{ active: store.page === 'overview' }"
+                @click="handleTabClick('overview')"
+              >
+                <span class="tab-icon">📊</span>
+                <span>总览</span>
+              </button>
+              <button
+                class="tab-pill"
+                :class="{ active: store.mapOpen }"
+                @click="handleTabClick('map')"
+              >
+                <span class="tab-icon">🗺️</span>
+                <span>地图</span>
+              </button>
+            </div>
           </div>
-        </div>
 
-        <!-- 核心内容区域：左侧行程面板 + 右侧地图 -->
-        <div class="trip-content-main">
-          <aside class="trip-side-panel">
-            <OverviewPanel v-if="store.page === 'overview'" />
-            <DayAccordion v-else />
-          </aside>
+          <!-- 核心内容区域：左侧行程面板 + 右侧地图 -->
+          <div class="trip-content-main">
+            <aside class="trip-side-panel">
+              <OverviewPanel v-if="store.page === 'overview'" />
+              <DayAccordion v-else />
+            </aside>
 
-          <!-- 地图视图（PC端常驻右侧，移动端点击Tab「地图」全屏浮层展示） -->
-          <MapView />
+            <!-- 地图视图（PC端常驻右侧，移动端点击Tab「地图」全屏浮层展示） -->
+            <MapView />
 
-          <!-- 全屏选点组件 -->
-          <PlacePicker v-if="store.pickerOpen" />
-        </div>
+            <!-- 全屏选点组件 -->
+            <PlacePicker v-if="store.pickerOpen" />
+          </div>
+        </main>
       </div>
     </template>
 

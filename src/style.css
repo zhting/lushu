@@ -885,7 +885,7 @@ button {
 .immersive-trip-header {
   position: relative;
   width: 100%;
-  height: 160px;
+  height: 195px;
   flex: none;
   overflow: hidden;
 }
@@ -896,17 +896,19 @@ button {
   width: 100%;
   height: 100%;
   object-fit: cover;
+  object-position: center 30%;
 }
 
+/* 明媚自然的轻量渐变遮罩，保护文字可读性同时透出蓝天碧湖 */
 .header-gradient-mask {
   position: absolute;
   inset: 0;
-  background: linear-gradient(180deg, rgba(15, 23, 42, 0.4) 0%, rgba(15, 23, 42, 0.72) 100%);
+  background: linear-gradient(180deg, rgba(15, 23, 42, 0.36) 0%, rgba(15, 23, 42, 0.05) 45%, rgba(15, 23, 42, 0.55) 100%);
 }
 
 .immersive-top-nav {
   position: absolute;
-  top: 10px;
+  top: 12px;
   left: 0;
   right: 0;
   padding: 0 16px;
@@ -917,47 +919,31 @@ button {
 }
 
 .glass-circle-btn {
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border-radius: 50%;
-  border: 1px solid rgba(255, 255, 255, 0.28);
-  background: rgba(255, 255, 255, 0.2);
-  backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(15, 23, 42, 0.28);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
   color: #ffffff;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 18px;
   font-weight: 700;
   cursor: pointer;
-  transition: background 0.15s, transform 0.15s;
+  transition: all 0.15s ease;
 }
 
 .glass-circle-btn:hover {
-  background: rgba(255, 255, 255, 0.35);
+  background: rgba(15, 23, 42, 0.45);
   transform: scale(1.05);
 }
 
-.header-center-brand {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: rgba(0, 0, 0, 0.25);
-  padding: 2px 10px 2px 6px;
-  border-radius: var(--radius-pill);
-  backdrop-filter: blur(6px);
-}
-
-.mini-brand-logo {
-  width: 22px;
-  height: 22px;
-  object-fit: contain;
-}
-
-.mini-brand-name {
-  font-size: 12px;
-  font-weight: 700;
-  color: #ffffff;
+.share-icon-svg {
+  width: 16px;
+  height: 16px;
 }
 
 .header-right-actions {
@@ -971,53 +957,93 @@ button {
 }
 
 .header-popover {
-  top: 40px;
+  top: 42px;
   right: 0;
 }
 
+/* 行程大标题与品牌Logo区域（位于封面图左下方） */
 .immersive-title-block {
   position: absolute;
-  bottom: 12px;
-  left: 20px;
-  right: 20px;
+  bottom: 28px;
+  left: 18px;
+  right: 18px;
   z-index: 10;
   color: #ffffff;
 }
 
-.immersive-title {
-  margin: 0 0 2px;
-  font-size: 22px;
+.brand-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 3px;
+}
+
+.brand-row-logo {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.4));
+}
+
+.brand-row-text {
+  font-size: 15px;
   font-weight: 800;
-  letter-spacing: -0.2px;
-  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.6);
+  color: #ffffff;
+  letter-spacing: 0.3px;
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+}
+
+.immersive-title {
+  margin: 0 0 4px;
+  font-size: 24px;
+  font-weight: 900;
+  letter-spacing: -0.3px;
+  color: #ffffff;
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
 .immersive-sub {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.9);
-  font-weight: 500;
-  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.95);
+  font-weight: 600;
+  text-shadow: 0 1px 5px rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* 下方主体白色圆角大卡片（向上浮动 20px 覆盖在封面图底沿） */
+.trip-main-card {
+  position: relative;
+  margin-top: -20px;
+  border-radius: 26px 26px 0 0;
+  background: #ffffff;
+  z-index: 20;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  box-shadow: 0 -4px 20px rgba(15, 23, 42, 0.08);
 }
 
 /* 悬浮 Tab 胶囊栏 */
 .tab-capsule-bar-wrap {
-  padding: 10px 16px 6px;
-  background: var(--bg);
+  padding: 12px 16px 8px;
+  background: #ffffff;
   flex: none;
 }
 
 .tab-capsule-bar {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 6px;
-  padding: 4px;
-  background: #ffffff;
-  border: 1px solid var(--line);
+  gap: 2px;
+  padding: 3px;
+  background: #f1f5f9;
+  border: none;
   border-radius: var(--radius-pill);
-  box-shadow: 0 2px 10px rgba(15, 30, 60, 0.05);
 }
 
 .tab-pill {
@@ -1028,7 +1054,7 @@ button {
   border-radius: var(--radius-pill);
   border: none;
   background: transparent;
-  color: var(--muted);
+  color: #475569;
   font-size: 13.5px;
   font-weight: 600;
   cursor: pointer;
@@ -1040,9 +1066,9 @@ button {
 }
 
 .tab-pill.active {
-  background: var(--brand-gradient);
+  background: #2563eb;
   color: #ffffff;
-  box-shadow: 0 2px 10px rgba(27, 100, 242, 0.3);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28);
 }
 
 .tab-icon {
@@ -1084,16 +1110,16 @@ button {
 
 .day-card {
   background: #ffffff;
-  border-radius: 20px;
-  border: 1px solid var(--line-subtle);
-  box-shadow: var(--shadow-card);
+  border-radius: 18px;
+  border: 1.5px solid #e2e8f0;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
   overflow: hidden;
-  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+  transition: all 0.2s ease;
 }
 
 .day-card.day-card-open {
-  border-color: #cbd5e1;
-  box-shadow: var(--shadow-hover);
+  border-color: #93c5fd;
+  box-shadow: 0 4px 18px rgba(37, 99, 235, 0.08);
 }
 
 /* 手风琴头部 */
@@ -1101,7 +1127,7 @@ button {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
   padding: 14px 16px;
   cursor: pointer;
   user-select: none;
@@ -1109,20 +1135,22 @@ button {
   overflow: hidden;
 }
 
-/* 右侧水墨山水装饰底纹 */
+/* 右侧清新彩色水彩山水装饰底纹 */
 .day-header-deco {
   position: absolute;
   top: 0;
   right: 0;
   bottom: 0;
-  width: 220px;
+  width: 200px;
   pointer-events: none;
   overflow: hidden;
-  opacity: 0.22;
+  opacity: 0.55;
+  mask-image: linear-gradient(to right, transparent 0%, black 50%);
+  -webkit-mask-image: linear-gradient(to right, transparent 0%, black 50%);
 }
 
 .day-card-header.open .day-header-deco {
-  opacity: 0.38;
+  opacity: 0.75;
 }
 
 .day-deco-img {
@@ -1132,26 +1160,28 @@ button {
   object-position: right center;
 }
 
-/* D1 / D2 胶囊徽章 */
-.day-pill-badge {
+/* D1 / D2 正圆形胶囊徽章（设计图样式） */
+.day-circle-badge {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 3px 9px;
-  border-radius: 8px;
-  font-size: 13px;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  font-size: 12.5px;
   font-weight: 800;
   background: #e2e8f0;
   color: #475569;
-  letter-spacing: 0.5px;
+  letter-spacing: -0.2px;
   flex: none;
   z-index: 1;
+  transition: all 0.15s ease;
 }
 
-.day-pill-badge.day-pill-active {
+.day-circle-badge.day-circle-active {
   background: #2563eb;
   color: #ffffff;
-  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.32);
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.35);
 }
 
 .day-title-info {
@@ -1162,19 +1192,20 @@ button {
 }
 
 .day-title-text {
-  font-size: 15px;
+  font-size: 16px;
   font-weight: 800;
-  color: var(--text-dark);
+  color: #0f172a;
 }
 
 .day-date-text {
-  font-size: 12px;
+  font-size: 13px;
   color: #64748b;
+  font-weight: 500;
 }
 
 .day-route-summary {
   font-size: 12px;
-  color: var(--brand);
+  color: #2563eb;
   font-weight: 500;
   max-width: 140px;
   white-space: nowrap;
@@ -1182,37 +1213,24 @@ button {
   text-overflow: ellipsis;
 }
 
-.day-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  z-index: 2;
-}
-
-.day-dots-btn {
-  font-size: 14px;
-  color: #94a3b8;
-}
-
-.more-menu-wrap {
-  position: relative;
-}
-
-.day-popover {
-  top: 36px;
-  right: 0;
-}
-
 .toggle-arrow {
   width: 24px;
   height: 24px;
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
-  color: #64748b;
-  font-weight: 700;
+  color: #334155;
+  transition: transform 0.2s ease;
+  z-index: 2;
+}
+
+.toggle-arrow.arrow-up {
+  transform: rotate(180deg);
+}
+
+.chevron-svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* 底部固定「＋ 增加一天」按钮 */
@@ -1293,12 +1311,12 @@ button {
 
 /* 序号实心亮蓝圆圈 1, 2 */
 .tl-node-number {
-  width: 24px;
-  height: 24px;
+  width: 26px;
+  height: 26px;
   border-radius: 50%;
   background: #2563eb;
   color: #ffffff;
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 800;
   display: flex;
   align-items: center;
@@ -1308,17 +1326,17 @@ button {
   cursor: grab;
 }
 
-/* 垂直纯细虚线连接线 */
+/* 垂直纯细天蓝色虚线连接线 */
 .tl-vertical-line {
   flex: 1;
   width: 0;
   border-left: 2px dashed #93c5fd;
   margin: 3px 0;
-  min-height: 44px;
+  min-height: 48px;
 }
 
 .tl-vertical-line.line-short {
-  min-height: 20px;
+  min-height: 22px;
 }
 
 .tl-body-col {
@@ -1326,7 +1344,7 @@ button {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  padding-bottom: 12px;
+  padding-bottom: 14px;
   min-width: 0;
 }
 
@@ -1344,28 +1362,31 @@ button {
 }
 
 .station-icon-wrap {
-  width: 26px;
-  height: 26px;
-  border-radius: 6px;
-  background: #f1f5f9;
+  width: 24px;
+  height: 24px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13.5px;
+  color: #475569;
   flex: none;
+}
+
+.station-svg {
+  width: 20px;
+  height: 20px;
 }
 
 .station-name-wrap {
   flex: 1;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
   cursor: pointer;
   min-width: 0;
 }
 
 .station-name {
-  font-size: 14.5px;
+  font-size: 15.5px;
   font-weight: 700;
   color: #0f172a;
   white-space: nowrap;
@@ -1373,7 +1394,7 @@ button {
   text-overflow: ellipsis;
 }
 
-/* 橙红色铅笔图标 */
+/* 纯正高亮橙色铅笔图标 */
 .pencil-edit-btn {
   border: none;
   background: transparent;
@@ -1381,17 +1402,17 @@ button {
   padding: 2px;
   display: flex;
   align-items: center;
-  color: var(--accent-orange);
+  color: #f97316;
   transition: transform 0.15s;
 }
 
 .pencil-icon-svg {
-  width: 14px;
-  height: 14px;
+  width: 15px;
+  height: 15px;
 }
 
 .station-name-wrap:hover .pencil-edit-btn {
-  transform: scale(1.15);
+  transform: scale(1.18);
 }
 
 .station-actions-wrap {
@@ -1423,17 +1444,20 @@ button {
 .tl-leg-pill {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 6px;
   color: #64748b;
-  font-size: 12px;
+  font-size: 12.5px;
   font-weight: 500;
   width: fit-content;
-  margin-left: 2px;
-  margin-top: 2px;
+  margin-left: 4px;
+  margin-top: 3px;
 }
 
-.car-emoji {
-  font-size: 13px;
+.car-icon-svg {
+  width: 14px;
+  height: 14px;
+  color: #475569;
+  flex: none;
 }
 
 .leg-info-text {

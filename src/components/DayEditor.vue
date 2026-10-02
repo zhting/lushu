@@ -102,17 +102,29 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
           </div>
 
           <!-- 右侧节点主体卡片 -->
+          <!-- 右侧节点主体卡片 -->
           <div class="tl-body-col">
             <div class="tl-station-card">
-              <!-- 图标：灰底小方块 -->
+              <!-- 图标：统一精致深灰蓝色矢量图标 -->
               <div class="station-icon-wrap">
-                <span>{{ kindIcon(s.kind) }}</span>
+                <svg v-if="s.kind === 'scenic'" class="station-svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 2L2 7v2h20V7L12 2zm1 19v-9h-2v9H4v2h16v-2h-7zm-4-9h2v9H9v-9zm6 0h2v9h-2v-9z"/>
+                </svg>
+                <svg v-else-if="s.kind === 'food'" class="station-svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z"/>
+                </svg>
+                <svg v-else-if="s.kind === 'fuel'" class="station-svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M19.77 7.23l.01-.01-3.72-3.72L15 4.56l2.11 2.11c-.94.36-1.61 1.26-1.61 2.33a2.5 2.5 0 002.5 2.5c.36 0 .69-.1.97-.28l1.46 1.46c-.76 2.36-2.28 4.95-3.43 6.32V19h-2v-8c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v10h10v-3.81c1.55-1.78 3.52-5.11 4.41-7.85l1.36 1.36 1.42-1.41-1.42-1.41v-.01l-.01.01-1.99-1.99zM12 14H6v-3h6v3z"/>
+                </svg>
+                <svg v-else class="station-svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                </svg>
               </div>
 
               <!-- 名称与橙红色编辑小铅笔 -->
               <div class="station-name-wrap" @click="store.openStopEditor(day.id, s.id)">
                 <span class="station-name">{{ s.name }}</span>
-                <!-- 橙色斜向铅笔图标 -->
+                <!-- 纯正橙色铅笔图标 -->
                 <button
                   class="pencil-edit-btn"
                   title="修改地点/类型"
@@ -153,7 +165,11 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
 
             <!-- 节点间车行信息 -->
             <div v-if="legText(j)" class="tl-leg-pill">
-              <span class="car-emoji">🚗</span>
+              <svg class="car-icon-svg" viewBox="0 0 24 24" fill="currentColor">
+                <path d="M18.92 6.01C18.72 5.42 18.16 5 17.5 5h-11c-.66 0-1.21.42-1.42 1.01L3 12v8c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-1h12v1c0 .55.45 1 1 1h1c.55 0 1-.45 1-1v-8l-2.08-5.99zM6.85 7h10.29l1.04 3H5.81l1.04-3zM19 17H5v-4.66l.12-.34h13.77l.11.34V17z"/>
+                <circle cx="7.5" cy="14.5" r="1.5"/>
+                <circle cx="16.5" cy="14.5" r="1.5"/>
+              </svg>
               <span class="leg-info-text">{{ legText(j) }}</span>
             </div>
           </div>
