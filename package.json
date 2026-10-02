@@ -1,7 +1,7 @@
 {
   "name": "lushu",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "路书 · Web 版自驾行程规划（M1 原型）",
   "scripts": {
