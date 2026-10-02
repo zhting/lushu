@@ -90,9 +90,11 @@ export const useTripStore = defineStore('trip', () => {
     mapCfg.key = cfg.amapKey || ''
     mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
     hasAmapKey.value = cfg.hasAmapKey
-    const saved = localStorage.getItem('lushu.provider')
-    mapCfg.provider =
-      saved === 'amap' && cfg.hasAmapKey ? 'amap' : saved === 'osm' ? 'osm' : (cfg.defaultProvider as MapProvider)
+    // 地图引擎由系统管理员在后台统一确定，移除用户本地覆盖
+    try {
+      localStorage.removeItem('lushu.provider')
+    } catch {}
+    mapCfg.provider = (cfg.defaultProvider as MapProvider) || 'osm'
     mapSvc.setProvider(mapCfg.provider)
 
     const data = await api.getTrips()
@@ -109,6 +111,7 @@ export const useTripStore = defineStore('trip', () => {
     view.value = 'overview'
     savedTrips.list.splice(0)
     Object.keys(legDistances).forEach((k) => delete legDistances[k])
+    Object.keys(legDurations).forEach((k) => delete legDurations[k])
     Object.keys(legPaths).forEach((k) => delete legPaths[k])
     mapCfg.key = ''
     mapCfg.securityJsCode = ''
@@ -136,29 +139,16 @@ export const useTripStore = defineStore('trip', () => {
     api.putTrip(entry).catch((e) => notify(e?.message || '保存到服务端失败', 'error'))
   }
 
-  // ───────────────────────── 数据源管理（开源 OSM / 高德） ─────────────────────────
+  // ───────────────────────── 数据源管理（开源 OSM / 高德，管理员统一指定） ─────────────────────────
 
   /** 应用服务端下发的地图配置（管理后台保存后调用） */
   function applyServerConfig(cfg: { amapKey: string; amapSecurityJsCode: string; defaultProvider: string }) {
     mapCfg.key = cfg.amapKey || ''
     mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
     hasAmapKey.value = !!mapCfg.key
-    if (mapCfg.provider === 'amap' && !hasAmapKey.value) {
-      // 高德 Key 被移除：回退开源并重算
-      applyProvider('osm', '', '')
-      return
-    }
-    applyProvider(mapCfg.provider, mapCfg.key, mapCfg.securityJsCode)
-  }
-
-  /** 顶栏「数据源」：在开源 / 高德之间直接切换（高德需服务端已配置 Key） */
-  function toggleProvider() {
-    const next: MapProvider = mapCfg.provider === 'osm' ? 'amap' : 'osm'
-    if (next === 'amap' && !hasAmapKey.value) {
-      notify('管理员尚未在后台配置高德 Key，暂无法使用高德地图', 'error')
-      return
-    }
-    applyProvider(next, mapCfg.key, mapCfg.securityJsCode)
+    const targetProvider: MapProvider =
+      cfg.defaultProvider === 'amap' && hasAmapKey.value ? 'amap' : 'osm'
+    applyProvider(targetProvider, mapCfg.key, mapCfg.securityJsCode)
   }
 
   /** 选择地图数据源。两种地图坐标系不同（WGS-84 / GCJ-02），切换后旧线路作废并全部重算。 */
@@ -167,13 +157,13 @@ export const useTripStore = defineStore('trip', () => {
     mapCfg.provider = provider
     mapCfg.key = key.trim()
     mapCfg.securityJsCode = securityJsCode.trim()
-    localStorage.setItem('lushu.provider', provider)
     mapSvc.setProvider(provider)
     if (changed) {
       // 坐标系不同，旧的车行线路/距离不可混用
       Object.keys(legDistances).forEach((k) => delete legDistances[k])
+      Object.keys(legDurations).forEach((k) => delete legDurations[k])
       Object.keys(legPaths).forEach((k) => delete legPaths[k])
-      notify(mapCfg.provider === 'osm' ? '已切换到开源地图（OpenStreetMap），线路将重新计算' : '已切换到高德地图，线路将重新计算')
+      notify(mapCfg.provider === 'osm' ? '全站已切换到开源地图（OpenStreetMap），线路重新规划中' : '全站已切换到高德地图，线路重新规划中')
     }
     retryLegs()
   }
@@ -301,6 +291,8 @@ export const useTripStore = defineStore('trip', () => {
   // ───────────────────────── 相邻节点车行距离与线路 ─────────────────────────
   /** key = dayId，值 = 相邻节点间车行距离（与 routePointsOf 序列一一对应，长度 = 点数-1）；拉取失败不写入 */
   const legDistances = reactive<Record<string, number[]>>({})
+  /** key = dayId，值 = 相邻节点间车行预估时长（单位：秒，与 routePointsOf 序列一一对应）；拉取失败不写入 */
+  const legDurations = reactive<Record<string, number[]>>({})
   /** key = dayId，值 = 该天逐段车行线路拼接后的折线（地图绘制用） */
   const legPaths = reactive<Record<string, [number, number][]>>({})
   const legTimers: Record<string, number> = {}
@@ -324,16 +316,18 @@ export const useTripStore = defineStore('trip', () => {
     legSeq[dayId] = seqId
     if (pts.length < 2) {
       delete legDistances[dayId]
+      delete legDurations[dayId]
       delete legPaths[dayId]
       return
     }
     const dists: number[] = []
+    const durations: number[] = []
     const path: [number, number][] = []
     try {
       for (let i = 1; i < pts.length; i++) {
         // 逐段顺序请求并留出间隔，避免触发公共服务的频率限制；单段失败重试一次
         if (i > 1) await new Promise((r) => setTimeout(r, 400))
-        let r: { distanceM: number; path: [number, number][] }
+        let r: { distanceM: number; durationS: number; path: [number, number][] }
         try {
           r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
         } catch {
@@ -342,16 +336,19 @@ export const useTripStore = defineStore('trip', () => {
         }
         if (legSeq[dayId] !== seqId) return // 期间又被编辑，丢弃过期结果
         dists.push(r.distanceM)
+        durations.push(r.durationS)
         path.push(...r.path)
       }
     } catch {
       if (legSeq[dayId] !== seqId) return
       delete legDistances[dayId] // 重试后仍失败：距离回退直线、地图回退虚线
+      delete legDurations[dayId]
       delete legPaths[dayId]
       return
     }
     if (legSeq[dayId] !== seqId) return
     legDistances[dayId] = dists
+    legDurations[dayId] = durations
     legPaths[dayId] = path
     save()
   }
@@ -618,10 +615,10 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legDurations, legPaths,
     tripSummaries,
     init: loadAll, notify, save, saveNow, reset,
-    applyProvider, applyServerConfig, toggleProvider, retryLegs,
+    applyProvider, applyServerConfig, retryLegs,
     createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay,
     addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,

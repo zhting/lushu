@@ -1,0 +1,73 @@
+name: Deploy to Tencent Cloud
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出代码 (Checkout)
+        uses: actions/checkout@v4
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 安装依赖
+        run: npm install
+
+      - name: 编译前端静态产物
+        run: npm run build
+
+      - name: 打包部署产物 (排除运行时数据库)
+        run: |
+          mkdir -p deploy-package
+          cp -r dist deploy-package/
+          cp -r server deploy-package/
+          rm -rf deploy-package/server/data # 严防覆盖线上已有用户数据与密钥
+          cp package.json deploy-package/
+          cp package-lock.json deploy-package/
+          cp ecosystem.config.cjs deploy-package/
+          cd deploy-package && tar -czf ../deploy.tar.gz .
+
+      - name: 配置 SSH 密钥
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      - name: 添加服务器到 known_hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.SERVER_HOST || '106.53.173.5' }} >> ~/.ssh/known_hosts
+
+      - name: 上传构建产物至服务器
+        run: |
+          scp deploy.tar.gz ${{ secrets.SERVER_USER || 'ubuntu' }}@${{ secrets.SERVER_HOST || '106.53.173.5' }}:/tmp/deploy.tar.gz
+
+      - name: 远程更新与热重载服务
+        run: |
+          ssh ${{ secrets.SERVER_USER || 'ubuntu' }}@${{ secrets.SERVER_HOST || '106.53.173.5' }} << 'EOF'
+            set -e
+            echo "==> 解压更新产物到 /var/www/lushu ..."
+            tar -xzf /tmp/deploy.tar.gz -C /var/www/lushu
+            rm -f /tmp/deploy.tar.gz
+
+            cd /var/www/lushu
+            echo "==> 安装后端生产依赖 ..."
+            npm install --omit=dev
+
+            echo "==> 使用 PM2 重载后端守护进程 ..."
+            pm2 startOrReload ecosystem.config.cjs --update-env
+            pm2 save
+
+            echo "==> 检查并重载 Nginx ..."
+            sudo nginx -t && sudo nginx -s reload
+            echo "==> 自动化部署全部完成！"
+          EOF

@@ -19,6 +19,22 @@ export function fmtDistance(m: number): string {
   return `${km >= 100 ? Math.round(km) : km.toFixed(1)} km`
 }
 
+/** 格式化车程预估时长（秒 → X小时Y分 / X分钟 / <1分钟） */
+export function fmtDuration(s: number): string {
+  if (!Number.isFinite(s) || s <= 0) return ''
+  const totalMins = Math.round(s / 60)
+  if (totalMins < 1) return '<1分钟'
+  if (totalMins < 60) return `${totalMins}分钟`
+  const hours = Math.floor(totalMins / 60)
+  const mins = totalMins % 60
+  if (hours < 24) {
+    return mins > 0 ? `${hours}小时${mins}分` : `${hours}小时`
+  }
+  const days = Math.floor(hours / 24)
+  const remainHours = hours % 24
+  return remainHours > 0 ? `${days}天${remainHours}小时` : `${days}天`
+}
+
 export function dateOfDay(startDate: string, index: number): Date {
   const d = new Date((startDate || '2026-01-01') + 'T00:00:00')
   d.setDate(d.getDate() + index)

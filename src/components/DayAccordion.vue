@@ -1,14 +1,16 @@
 <script setup lang="ts">
+import { ref } from 'vue'
 import { useTripStore } from '../stores/trip'
 import { cityOfAddress, cnOrdinal, dateOfDay, fmtDate } from '../services/geo'
 import DayEditor from './DayEditor.vue'
 
 const store = useTripStore()
+const activeMenuDayId = ref<string | null>(null)
 
 /** 头部路线摘要：起点城市 → 终点城市（无地点时回退为日期） */
 function routeLabel(i: number): string {
-  const d = store.trip!.days[i]
-  if (!d.stops.length) return ''
+  const d = store.trip?.days[i]
+  if (!d || !d.stops.length) return ''
   const a = cityOfAddress(d.stops[0].address)
   const b = cityOfAddress(d.stops[d.stops.length - 1].address)
   if (!a && !b) return ''
@@ -19,31 +21,99 @@ function routeLabel(i: number): string {
 function toggleDay(id: string) {
   store.view = store.view === id ? '' : id
 }
+
+function toggleDayMenu(dayId: string, e: MouseEvent) {
+  e.stopPropagation()
+  activeMenuDayId.value = activeMenuDayId.value === dayId ? null : dayId
+}
+
+function handleAddDay() {
+  if (!store.trip) return
+  store.setDayCount(store.trip.days.length + 1)
+}
 </script>
 
 <template>
-  <div v-if="store.trip" class="acc">
-    <section
-      v-for="(d, i) in store.trip.days"
-      :key="d.id"
-      class="acc-item"
-      :class="{ open: store.view === d.id }"
-    >
-      <div class="acc-head" :class="{ open: store.view === d.id }" role="button" @click="toggleDay(d.id)">
-        <span class="acc-caret">▸</span>
-        <span class="acc-name">第{{ cnOrdinal(i + 1) }}天</span>
-        <span class="acc-route">
-          <template v-if="routeLabel(i)">📍 {{ routeLabel(i) }}</template>
-          <template v-else>{{ fmtDate(dateOfDay(store.trip!.startDate, i)) }}</template>
-        </span>
-        <button class="icon-btn acc-map" title="在地图上查看当天路线" @click.stop="store.showDayOnMap(d.id)">🗺</button>
-        <button class="icon-btn acc-del" title="删除这一天" @click.stop="store.deleteDay(d.id)">🗑</button>
-      </div>
-      <div v-if="store.view === d.id" class="acc-body">
-        <DayEditor :day-id="d.id" />
-      </div>
-    </section>
+  <div v-if="store.trip" class="days-container" @click="activeMenuDayId = null">
+    <div class="day-cards-list">
+      <section
+        v-for="(d, i) in store.trip.days"
+        :key="d.id"
+        class="day-card"
+        :class="{ 'day-card-open': store.view === d.id }"
+      >
+        <!-- 手风琴头部 -->
+        <div
+          class="day-card-header"
+          :class="{ open: store.view === d.id }"
+          role="button"
+          @click="toggleDay(d.id)"
+        >
+          <!-- 装饰性山峦水墨底纹 -->
+          <div class="day-header-deco">
+            <img src="/images/day_landscape.jpg" alt="山水装饰" class="day-deco-img" />
+          </div>
 
-    <button class="acc-add" @click="store.setDayCount(store.trip.days.length + 1)">＋ 增加一天</button>
+          <!-- 徽标：D1（蓝色填充）, D2（灰色） -->
+          <div class="day-pill-badge" :class="{ 'day-pill-active': store.view === d.id }">
+            D{{ i + 1 }}
+          </div>
+
+          <!-- 标题与日期：第一天 10-02 周五 -->
+          <div class="day-title-info">
+            <span class="day-title-text">第{{ cnOrdinal(i + 1) }}天</span>
+            <span class="day-date-text">{{ fmtDate(dateOfDay(store.trip.startDate, i)) }}</span>
+            <span v-if="routeLabel(i) && store.view !== d.id" class="day-route-summary">
+              📍 {{ routeLabel(i) }}
+            </span>
+          </div>
+
+          <div style="flex: 1"></div>
+
+          <!-- 操作按钮与折叠小尖角 -->
+          <div class="day-header-actions" @click.stop>
+            <div class="more-menu-wrap">
+              <button
+                class="icon-btn-ghost day-dots-btn"
+                title="更多操作"
+                @click="toggleDayMenu(d.id, $event)"
+              >
+                •••
+              </button>
+              <div v-if="activeMenuDayId === d.id" class="dropdown-popover day-popover">
+                <button class="popover-item" @click="store.showDayOnMap(d.id); activeMenuDayId = null">
+                  🗺️ 在地图上定位当天
+                </button>
+                <div class="popover-divider"></div>
+                <button
+                  class="popover-item danger-item"
+                  @click="store.deleteDay(d.id); activeMenuDayId = null"
+                >
+                  🗑️ 删除这一天
+                </button>
+              </div>
+            </div>
+
+            <!-- 收起/展开尖角箭头：设计图清晰为向上 ^ 或向下 v -->
+            <div class="toggle-arrow" :class="{ 'arrow-up': store.view === d.id }">
+              <span>{{ store.view === d.id ? '∧' : '∨' }}</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 手风琴展开内容：DayEditor -->
+        <div v-if="store.view === d.id" class="day-card-body">
+          <DayEditor :day-id="d.id" />
+        </div>
+      </section>
+    </div>
+
+    <!-- 底部悬浮大胶囊按钮：「＋ 增加一天」 -->
+    <div class="add-day-floating-wrap">
+      <button class="floating-add-day-btn" @click="handleAddDay">
+        <span class="plus-icon">＋</span>
+        <span class="btn-label">增加一天</span>
+      </button>
+    </div>
   </div>
 </template>

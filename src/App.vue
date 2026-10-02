@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useTripStore } from './stores/trip'
 import { useAuthStore } from './stores/auth'
 import LoginPage from './components/LoginPage.vue'
@@ -12,6 +12,7 @@ import PlacePicker from './components/PlacePicker.vue'
 
 const store = useTripStore()
 const auth = useAuthStore()
+const showTripMoreMenu = ref(false)
 
 onMounted(() => auth.init())
 
@@ -30,48 +31,163 @@ watch(
     }
   },
 )
+
+function handleExport() {
+  if (!store.trip) return
+  const blob = new Blob([store.exportJson()], { type: 'application/json' })
+  const a = document.createElement('a')
+  a.href = URL.createObjectURL(blob)
+  a.download = `${store.trip.title || '路书'}.json`
+  a.click()
+  URL.revokeObjectURL(a.href)
+  store.notify('已成功导出路书 JSON 文件')
+}
+
+function handleTabClick(tab: 'trip' | 'overview' | 'map') {
+  if (tab === 'map') {
+    store.openMapOverview()
+  } else if (tab === 'overview') {
+    store.goOverview()
+  } else {
+    store.goDays()
+  }
+}
 </script>
 
 <template>
-  <div class="app">
+  <div class="app-root" @click="showTripMoreMenu = false">
+    <!-- 加载中状态 -->
     <template v-if="!auth.ready">
-      <div class="center-screen"><p class="muted">加载中…</p></div>
+      <div class="center-screen"><p class="muted">小鹿路书加载中…</p></div>
     </template>
+
+    <!-- 登录注册页 -->
     <template v-else-if="!auth.user">
       <LoginPage />
     </template>
+
+    <!-- 管理后台 -->
     <template v-else-if="store.adminOpen">
       <AdminPage />
     </template>
+
+    <!-- 首页路书列表 -->
     <template v-else-if="store.page === 'home'">
       <TripListPage />
     </template>
+
+    <!-- 行程编辑/总览主界面 -->
     <template v-else>
-      <header class="topbar">
-        <button
-          class="btn btn-mini"
-          @click="store.page === 'overview' ? store.goDays() : store.goHome()"
-        >
-          {{ store.page === 'overview' ? '← 返回' : '← 列表' }}
-        </button>
-        <h1 v-if="store.trip" class="trip-title">{{ store.trip.title }}</h1>
-        <div style="flex: 1"></div>
-        <button v-if="store.hasAmapKey" class="btn btn-mini" @click="store.toggleProvider()">
-          {{ store.mapCfg.provider === 'osm' ? '🌍 开源' : '🇨🇳 高德' }}
-        </button>
-        <button v-if="auth.user?.isAdmin" class="btn btn-mini" title="管理后台" @click="store.adminOpen = true">⚙</button>
-        <button v-if="store.page === 'trip'" class="btn btn-mini" @click="store.goOverview()">📊 总览</button>
-        <button class="btn btn-mini map-toggle" @click="store.openMapOverview()">🗺 地图</button>
-      </header>
-      <div class="main">
-        <aside class="side">
-          <OverviewPanel v-if="store.page === 'overview'" />
-          <DayAccordion v-else />
-        </aside>
-        <MapView />
-        <PlacePicker v-if="store.pickerOpen" />
+      <div class="trip-page-layout">
+        <!-- 沉浸式顶部风景 Header -->
+        <header class="immersive-trip-header">
+          <img src="/images/trip_cover.jpg" alt="行程背景" class="header-bg-image" />
+          <div class="header-gradient-mask"></div>
+
+          <!-- 顶部快捷操作栏 -->
+          <div class="immersive-top-nav">
+            <button class="glass-circle-btn" title="返回路书列表" @click="store.goHome()">
+              ‹
+            </button>
+
+            <!-- 小鹿 Mini Logo + 小鹿路书 -->
+            <div class="header-center-brand">
+              <img src="/images/logo.png" alt="Logo" class="mini-brand-logo" />
+              <span class="mini-brand-name">小鹿路书</span>
+            </div>
+
+            <!-- 分享导出与三点菜单 -->
+            <div class="header-right-actions" @click.stop>
+              <button class="glass-circle-btn" title="导出 JSON" @click="handleExport">
+                ⎘
+              </button>
+              <div class="relative-wrap">
+                <button
+                  class="glass-circle-btn"
+                  title="更多设置"
+                  @click="showTripMoreMenu = !showTripMoreMenu"
+                >
+                  •••
+                </button>
+                <div v-if="showTripMoreMenu" class="dropdown-popover header-popover">
+                  <button class="popover-item" @click="store.goOverview(); showTripMoreMenu = false">
+                    ✏️ 编辑行程设置
+                  </button>
+                  <button class="popover-item" @click="handleExport(); showTripMoreMenu = false">
+                    ⎘ 导出路书 JSON
+                  </button>
+                  <button v-if="auth.user?.isAdmin" class="popover-item" @click="store.adminOpen = true; showTripMoreMenu = false">
+                    ⚙️ 管理后台
+                  </button>
+                  <div class="popover-divider"></div>
+                  <button
+                    class="popover-item danger-item"
+                    @click="store.deleteCurrentTrip(); showTripMoreMenu = false"
+                  >
+                    🗑️ 删除该路书
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 行程大标题与日期天数 -->
+          <div v-if="store.trip" class="immersive-title-block">
+            <h1 class="immersive-title">{{ store.trip.title }}</h1>
+            <div class="immersive-sub">
+              <span>📅 {{ store.trip.startDate }} · {{ store.trip.days.length }} 天</span>
+            </div>
+          </div>
+        </header>
+
+        <!-- 悬浮 Tab 胶囊切换栏 -->
+        <div class="tab-capsule-bar-wrap">
+          <div class="tab-capsule-bar">
+            <button
+              class="tab-pill"
+              :class="{ active: store.page === 'trip' && !store.mapOpen }"
+              @click="handleTabClick('trip')"
+            >
+              <span class="tab-icon">☰</span>
+              <span>列表</span>
+            </button>
+            <button
+              class="tab-pill"
+              :class="{ active: store.page === 'overview' }"
+              @click="handleTabClick('overview')"
+            >
+              <span class="tab-icon">📊</span>
+              <span>总览</span>
+            </button>
+            <button
+              class="tab-pill"
+              :class="{ active: store.mapOpen }"
+              @click="handleTabClick('map')"
+            >
+              <span class="tab-icon">🗺️</span>
+              <span>地图</span>
+            </button>
+
+          </div>
+        </div>
+
+        <!-- 核心内容区域：左侧行程面板 + 右侧地图 -->
+        <div class="trip-content-main">
+          <aside class="trip-side-panel">
+            <OverviewPanel v-if="store.page === 'overview'" />
+            <DayAccordion v-else />
+          </aside>
+
+          <!-- 地图视图（PC端常驻右侧，移动端点击Tab「地图」全屏浮层展示） -->
+          <MapView />
+
+          <!-- 全屏选点组件 -->
+          <PlacePicker v-if="store.pickerOpen" />
+        </div>
       </div>
     </template>
+
+    <!-- Toast 提示 -->
     <div v-if="store.toast" class="toast" :class="store.toast.kind">{{ store.toast.text }}</div>
   </div>
 </template>

@@ -32,12 +32,12 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   return provider === 'amap' ? amapSvc.currentPosition() : osmSvc.currentPosition()
 }
 
-/** 相邻两点间的车行导航线路（距离 + 折线） */
+/** 相邻两点间的车行导航线路（距离 + 耗时 + 折线） */
 export function legRoute(
   a: { lng: number; lat: number },
   b: { lng: number; lat: number },
   key = '',
   securityJsCode = '',
-): Promise<{ distanceM: number; path: [number, number][] }> {
+): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
   return provider === 'amap' ? amapSvc.legRoute(a, b, key, securityJsCode) : osmSvc.legRoute(a, b)
 }

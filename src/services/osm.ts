@@ -97,13 +97,13 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   })
 }
 
-const legCache = new Map<string, { distanceM: number; path: [number, number][] }>()
+const legCache = new Map<string, { distanceM: number; durationS: number; path: [number, number][] }>()
 
-/** 相邻两点间的车行导航线路（OSRM 演示服务）：距离 + 完整折线，按坐标对缓存 */
+/** 相邻两点间的车行导航线路（OSRM 演示服务）：距离 + 耗时 + 完整折线，按坐标对缓存 */
 export async function legRoute(
   a: { lng: number; lat: number },
   b: { lng: number; lat: number },
-): Promise<{ distanceM: number; path: [number, number][] }> {
+): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
   const key = `${a.lng.toFixed(5)},${a.lat.toFixed(5)}|${b.lng.toFixed(5)},${b.lat.toFixed(5)}`
   const hit = legCache.get(key)
   if (hit) return hit
@@ -113,9 +113,10 @@ export async function legRoute(
   )
   const route = data?.routes?.[0]
   const d = Number(route?.distance)
+  const dur = Number(route?.duration) || 0
   const path = (route?.geometry?.coordinates ?? []) as [number, number][]
   if (data?.code !== 'Ok' || !Number.isFinite(d) || path.length < 2) throw new Error('未测到车行线路（OSRM）')
-  const out = { distanceM: d, path }
+  const out = { distanceM: d, durationS: Math.round(dur), path }
   legCache.set(key, out)
   return out
 }

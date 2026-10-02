@@ -117,15 +117,15 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   })
 }
 
-const legCache = new Map<string, { distanceM: number; path: [number, number][] }>()
+const legCache = new Map<string, { distanceM: number; durationS: number; path: [number, number][] }>()
 
-/** 相邻两点间的车行导航线路（高德 Driving）：距离 + 完整折线，按坐标对缓存 */
+/** 相邻两点间的车行导航线路（高德 Driving）：距离 + 耗时 + 完整折线，按坐标对缓存 */
 export async function legRoute(
   a: { lng: number; lat: number },
   b: { lng: number; lat: number },
   key = '',
   securityJsCode = '',
-): Promise<{ distanceM: number; path: [number, number][] }> {
+): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
   // 地图库可能尚未被地图组件加载（如刷新后未打开过地图），这里自行加载，不依赖地图容器
   if (!getAMap()) await loadAMap(key, securityJsCode)
   const AMap = getAMap()!
@@ -141,6 +141,7 @@ export async function legRoute(
       }
       const route = result?.routes?.[0]
       const d = Number(route?.distance)
+      const dur = Number(route?.time) || 0
       const path: [number, number][] = []
       for (const step of route?.steps ?? []) {
         for (const p of step.path ?? []) path.push([p.lng, p.lat])
@@ -149,7 +150,7 @@ export async function legRoute(
         reject(new Error('未测到车行线路'))
         return
       }
-      const out = { distanceM: d, path }
+      const out = { distanceM: d, durationS: Math.round(dur), path }
       legCache.set(key0, out)
       resolve(out)
     })
