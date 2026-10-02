@@ -1,4 +1,4 @@
-import type { Poi, RoutePolicy, RouteResult, Stop } from '../types'
+import type { Poi } from '../types'
 
 let L: any = null
 let loadPromise: Promise<any> | null = null
@@ -53,9 +53,11 @@ async function fetchJson(url: string, source: string): Promise<any> {
 }
 
 /** POI 关键词搜索（Nominatim）。测试用：有每秒 1 次的官方使用限制，生产环境建议自建或换商用服务 */
-export async function searchPlaces(kw: string): Promise<Poi[]> {
+export async function searchPlaces(kw: string, city = ''): Promise<Poi[]> {
+  // Nominatim 无城市参数，把城市名拼进关键词限定范围
+  const q = city ? `${kw} ${city}` : kw
   const data = await fetchJson(
-    `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&accept-language=zh-CN&q=${encodeURIComponent(kw)}`,
+    `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=8&accept-language=zh-CN&q=${encodeURIComponent(q)}`,
     '地点搜索（Nominatim）',
   )
   return (Array.isArray(data) ? data : [])
@@ -95,30 +97,25 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   })
 }
 
-/**
- * 驾车路径规划（OSRM 演示服务器）。
- * 注意：演示服务器只有默认策略（路线策略参数暂不生效），也不提供过路费数据。
- */
-export async function fetchRoute(points: Stop[], _policy: RoutePolicy): Promise<RouteResult> {
-  const pts = points.filter(Boolean)
-  if (pts.length < 2) throw new Error('请先设置起点和终点')
-  if (pts.length - 2 > 16) throw new Error('途经点超过 16 个上限，请拆分到其他天')
+const legCache = new Map<string, { distanceM: number; path: [number, number][] }>()
 
-  const coords = pts.map((p) => `${p.lng},${p.lat}`).join(';')
+/** 相邻两点间的车行导航线路（OSRM 演示服务）：距离 + 完整折线，按坐标对缓存 */
+export async function legRoute(
+  a: { lng: number; lat: number },
+  b: { lng: number; lat: number },
+): Promise<{ distanceM: number; path: [number, number][] }> {
+  const key = `${a.lng.toFixed(5)},${a.lat.toFixed(5)}|${b.lng.toFixed(5)},${b.lat.toFixed(5)}`
+  const hit = legCache.get(key)
+  if (hit) return hit
   const data = await fetchJson(
-    `https://router.project-osrm.org/route/v1/driving/${coords}?overview=full&geometries=geojson`,
-    '路线规划（OSRM）',
+    `https://router.project-osrm.org/route/v1/driving/${a.lng},${a.lat};${b.lng},${b.lat}?overview=full&geometries=geojson`,
+    '距离测算（OSRM）',
   )
   const route = data?.routes?.[0]
-  if (data?.code !== 'Ok' || !route) throw new Error('未找到可行驾车路线（OSRM）')
-  // legs 与传入点一一对应：legs[i] 即第 i → i+1 个节点之间的真实行车距离/时长
-  const legs = (route.legs ?? [])
-    .map((l: any) => ({ distanceM: Number(l.distance) || 0, durationS: Number(l.duration) || 0 }))
-  return {
-    distanceM: Number(route.distance) || 0,
-    durationS: Number(route.duration) || 0,
-    tolls: null,
-    legs: legs.length ? legs : null,
-    path: (route.geometry?.coordinates ?? []) as [number, number][],
-  }
+  const d = Number(route?.distance)
+  const path = (route?.geometry?.coordinates ?? []) as [number, number][]
+  if (data?.code !== 'Ok' || !Number.isFinite(d) || path.length < 2) throw new Error('未测到车行线路（OSRM）')
+  const out = { distanceM: d, path }
+  legCache.set(key, out)
+  return out
 }

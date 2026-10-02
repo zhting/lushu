@@ -1,4 +1,4 @@
-import type { Poi, RoutePolicy, RouteResult, Stop } from '../types'
+import type { Poi } from '../types'
 
 let AMapNS: any = null
 let loadPromise: Promise<any> | null = null
@@ -117,60 +117,41 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   })
 }
 
-function policyValue(AMap: any, policy: RoutePolicy): number {
-  const DP = AMap.DrivingPolicy ?? {}
-  if (policy === 'leastFee') return DP.LEAST_FEE ?? 1
-  if (policy === 'shortest') return DP.LEAST_DISTANCE ?? 2
-  return DP.LEAST_TIME ?? 0
-}
+const legCache = new Map<string, { distanceM: number; path: [number, number][] }>()
 
-/**
- * 驾车路径规划：起点 → 途经点（≤16）→ 终点，一次请求。
- * 返回总里程、总时长、过路费（若接口提供）与完整折线。
- */
-export function fetchRoute(points: Stop[], policy: RoutePolicy): Promise<RouteResult> {
-  const AMap = getAMap()
-  if (!AMap) return Promise.reject(new Error('地图尚未加载完成'))
-  const pts = points.filter(Boolean)
-  if (pts.length < 2) return Promise.reject(new Error('请先设置起点和终点'))
-  const waypoints = pts.slice(1, -1)
-  if (waypoints.length > 16) return Promise.reject(new Error('途经点超过 16 个上限，请拆分到其他天'))
-
-  const driving = new AMap.Driving({ policy: policyValue(AMap, policy) })
-  const origin = new AMap.LngLat(pts[0].lng, pts[0].lat)
-  const destination = new AMap.LngLat(pts[pts.length - 1].lng, pts[pts.length - 1].lat)
-
+/** 相邻两点间的车行导航线路（高德 Driving）：距离 + 完整折线，按坐标对缓存 */
+export async function legRoute(
+  a: { lng: number; lat: number },
+  b: { lng: number; lat: number },
+  key = '',
+  securityJsCode = '',
+): Promise<{ distanceM: number; path: [number, number][] }> {
+  // 地图库可能尚未被地图组件加载（如刷新后未打开过地图），这里自行加载，不依赖地图容器
+  if (!getAMap()) await loadAMap(key, securityJsCode)
+  const AMap = getAMap()!
+  const key0 = `${a.lng.toFixed(5)},${a.lat.toFixed(5)}|${b.lng.toFixed(5)},${b.lat.toFixed(5)}`
+  const hit = legCache.get(key0)
+  if (hit) return hit
   return new Promise((resolve, reject) => {
-    driving.search(
-      origin,
-      destination,
-      { waypoints: waypoints.map((p) => new AMap.LngLat(p.lng, p.lat)) },
-      (status: string, result: any) => {
-        if (status !== 'complete') {
-          const msg =
-            status === 'no_data' ? '未找到可行驾车路线（可能无路网或距离过远）' : friendlyError(status, result)
-          reject(new Error(msg))
-          return
-        }
-        const route = result?.routes?.[0]
-        if (!route) {
-          reject(new Error('未找到可行驾车路线'))
-          return
-        }
-        const path: [number, number][] = []
-        for (const step of route.steps ?? []) {
-          for (const p of step.path ?? []) {
-            path.push([p.lng, p.lat])
-          }
-        }
-        resolve({
-          distanceM: Number(route.distance) || 0,
-          durationS: Number(route.time) || 0,
-          tolls: route.tolls != null ? Number(route.tolls) : null,
-          legs: null, // JS API 驾车结果不提供按途经点的分段数据，分段用直线近似
-          path,
-        })
-      },
-    )
+    const driving = new AMap.Driving()
+    driving.search(new AMap.LngLat(a.lng, a.lat), new AMap.LngLat(b.lng, b.lat), (status: string, result: any) => {
+      if (status !== 'complete') {
+        reject(new Error(friendlyError(status, result)))
+        return
+      }
+      const route = result?.routes?.[0]
+      const d = Number(route?.distance)
+      const path: [number, number][] = []
+      for (const step of route?.steps ?? []) {
+        for (const p of step.path ?? []) path.push([p.lng, p.lat])
+      }
+      if (!Number.isFinite(d) || path.length < 2) {
+        reject(new Error('未测到车行线路'))
+        return
+      }
+      const out = { distanceM: d, path }
+      legCache.set(key0, out)
+      resolve(out)
+    })
   })
 }

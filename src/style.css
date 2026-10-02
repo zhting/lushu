@@ -50,27 +50,14 @@ body {
   white-space: nowrap;
 }
 
-.title-input {
-  font-weight: 600;
-  font-size: 15px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  padding: 4px 8px;
-  background: transparent;
-  min-width: 180px;
-  max-width: 320px;
-}
-
-.title-input:hover,
-.title-input:focus {
-  border-color: var(--line);
-  background: #fff;
-  outline: none;
-}
-
-.topstats {
-  color: var(--muted);
-  font-size: 12.5px;
+.trip-title {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .main {
@@ -288,11 +275,6 @@ input[type='date'] {
   white-space: nowrap;
 }
 
-.chip-auto {
-  color: #92400e;
-  background: #fef3c7;
-}
-
 .muted {
   color: var(--muted);
   font-size: 12.5px;
@@ -303,33 +285,121 @@ input[type='date'] {
   font-size: 12.5px;
 }
 
-/* ─────────── 日程 Tab ─────────── */
-.tabs {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  padding-bottom: 10px;
-}
-
-.tab {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border-radius: 999px;
+/* ─────────── 日程手风琴 ─────────── */
+.acc-item {
   background: var(--panel);
   border: 1px solid var(--line);
-  cursor: pointer;
-  font: inherit;
-  font-size: 13px;
-  color: var(--text);
+  border-radius: var(--radius);
+  margin-bottom: 8px;
+  overflow: hidden;
 }
 
-.tab.active {
+.acc-item.open {
+  border-color: var(--brand);
+}
+
+.acc-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 10px 12px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+}
+
+.acc-head:hover {
+  background: #f8fafc;
+}
+
+.acc-head.open {
   background: var(--brand);
   border-color: var(--brand);
   color: #fff;
+}
+
+.acc-head.open:hover {
+  background: #275ed3;
+}
+
+.acc-item.open .acc-head {
+  border-bottom: 1px solid var(--line);
+}
+
+.acc-caret {
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  transition: transform 0.15s;
+}
+
+.acc-item.open .acc-caret {
+  transform: rotate(90deg);
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.acc-name {
+  flex: none;
+}
+
+.acc-route {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12.5px;
+  font-weight: 400;
+  color: var(--muted);
+}
+
+.acc-head.open .acc-route {
+  color: rgba(255, 255, 255, 0.92);
+}
+
+.acc-del {
+  flex: none;
+}
+
+.acc-map {
+  flex: none;
+}
+
+.acc-head.open .acc-del,
+.acc-head.open .acc-map {
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.acc-head.open .acc-del:hover,
+.acc-head.open .acc-map:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.15);
+}
+
+.acc-body {
+  padding: 10px 12px 2px;
+}
+
+.acc-add {
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+}
+
+.acc-add:hover {
+  border-color: var(--brand);
+  color: var(--brand);
 }
 
 .dot {
@@ -339,73 +409,112 @@ input[type='date'] {
   flex: none;
 }
 
-.warn-dot {
+/* ─────────── 单日时间轴 ─────────── */
+.tl {
+  padding: 2px 0 4px;
+}
+
+.tl-item {
+  position: relative;
+  padding: 5px 0 5px 34px;
+  cursor: grab;
+}
+
+.tl-item:active {
+  cursor: grabbing;
+}
+
+.tl-item.sortable-ghost {
+  opacity: 0.35;
+}
+
+.tl-item::before {
+  content: '';
+  position: absolute;
+  left: 11px;
+  top: 32px;
+  bottom: -4px;
+  border-left: 2px solid #c9d6ee;
+}
+
+.tl-item-last::before {
+  border-left-style: dashed;
+}
+
+.tl-item-add::before {
+  display: none;
+}
+
+.tl-no {
+  position: absolute;
+  left: 0;
+  top: 6px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--brand);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.tl-no-add {
+  background: #fff;
+  border: 2px dashed #9db4d8;
   font-size: 12px;
 }
 
-/* ─────────── 地点行 ─────────── */
-.stop {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: #fff;
-  margin-bottom: 6px;
-}
-
-.stop-empty {
-  border-style: dashed;
-  background: #fafbfc;
-  align-items: center;
-}
-
-.stop .emoji {
-  font-size: 16px;
-  line-height: 1.4;
-}
-
-.stop .body {
-  flex: 1;
+.tl-body {
   min-width: 0;
 }
 
-.stop .name {
+.tl-name {
   font-weight: 600;
   font-size: 13.5px;
   word-break: break-all;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 24px;
 }
 
-.stop .addr {
+.tl-ops {
+  display: flex;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.tl-item:hover .tl-ops,
+.tl-item:focus-within .tl-ops {
+  opacity: 1;
+}
+
+.tl-leg {
   color: var(--muted);
   font-size: 12px;
   margin-top: 1px;
 }
 
-.stop .stay {
-  color: var(--muted);
-  font-size: 12px;
-  margin-top: 4px;
-  display: flex;
-  align-items: center;
-  gap: 4px;
+.tl-item-add {
+  padding-top: 9px;
+  padding-bottom: 2px;
 }
 
-.stop .ops {
-  display: flex;
-  gap: 2px;
-  align-items: center;
-  flex: none;
+.tl-add-btn {
+  border: none;
+  background: transparent;
+  color: var(--brand);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 2px 4px;
 }
 
-.drag {
-  cursor: grab;
-  color: #b6c0cf;
-  padding: 0 2px;
-  user-select: none;
-  font-size: 14px;
-  letter-spacing: -2px;
+.tl-add-btn:hover {
+  text-decoration: underline;
 }
 
 .stay-input {
@@ -414,40 +523,13 @@ input[type='date'] {
   font-size: 12px;
 }
 
+@media (max-width: 880px) {
+  .tl-ops {
+    opacity: 1;
+  }
+}
+
 /* ─────────── 搜索 ─────────── */
-.search-wrap {
-  margin-top: 6px;
-}
-
-.search-status {
-  font-size: 12px;
-  color: var(--muted);
-  padding: 5px 2px 0;
-}
-
-.results {
-  position: relative;
-  z-index: 30;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  max-height: 260px;
-  overflow: auto;
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.results li {
-  padding: 8px 10px;
-  cursor: pointer;
-}
-
-.results li:hover {
-  background: #f2f6ff;
-}
-
 .r-name {
   font-weight: 600;
   font-size: 13px;
@@ -456,41 +538,6 @@ input[type='date'] {
 .r-addr {
   color: var(--muted);
   font-size: 12px;
-}
-
-/* ─────────── 时间轴 ─────────── */
-.tl-row {
-  display: flex;
-  gap: 10px;
-  padding: 3px 0;
-  font-size: 13px;
-  align-items: baseline;
-}
-
-.tl-time {
-  width: 74px;
-  flex: none;
-  color: var(--brand);
-  font-variant-numeric: tabular-nums;
-  font-weight: 600;
-  font-size: 12.5px;
-}
-
-.tl-drive {
-  color: var(--muted);
-  font-size: 12px;
-  padding-left: 84px;
-  margin: -1px 0 1px;
-}
-
-.warn-banner {
-  background: #fff7ed;
-  border: 1px solid #fed7aa;
-  color: #9a3412;
-  padding: 8px 10px;
-  border-radius: 10px;
-  font-size: 12.5px;
-  margin-top: 8px;
 }
 
 /* ─────────── 节点列表（无固定起终点） ─────────── */
@@ -508,52 +555,6 @@ input[type='date'] {
   margin-bottom: 8px;
 }
 
-.seg-line {
-  color: var(--muted);
-  font-size: 12px;
-  padding: 2px 4px 4px 26px;
-}
-
-.stop-editing {
-  border-color: var(--brand);
-  background: #f7faff;
-}
-
-.stop-draft {
-  border-color: var(--brand);
-  background: #f7faff;
-}
-
-.draft-title {
-  font-size: 12.5px;
-  color: var(--muted);
-  margin-bottom: 4px;
-}
-
-.edit-row {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  margin-bottom: 6px;
-}
-
-.edit-row label {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-.add-node-btn {
-  width: 100%;
-  margin-top: 8px;
-  border-style: dashed;
-  color: var(--muted);
-}
-
-.add-node-btn.btn-primary {
-  border-style: solid;
-  color: #fff;
-}
-
 /* ─────────── 总览 ─────────── */
 .ov-head {
   display: flex;
@@ -562,44 +563,8 @@ input[type='date'] {
   margin-bottom: 10px;
 }
 
-.ov-head h2 {
-  margin: 0;
-  font-size: 18px;
-}
-
 .ov-head .btn-primary {
   width: auto;
-}
-
-.stat-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-  gap: 8px;
-  margin-bottom: 10px;
-}
-
-.stat {
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 8px 4px;
-  text-align: center;
-}
-
-.stat b {
-  display: block;
-  font-size: 14px;
-}
-
-.stat span {
-  font-size: 11px;
-  color: var(--muted);
-}
-
-@media (max-width: 520px) {
-  .stat-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
 }
 
 .ov-row {
@@ -639,6 +604,55 @@ input[type='date'] {
   font-variant-numeric: tabular-nums;
   font-size: 12px;
   color: var(--text);
+}
+
+/* 每日概览：地点明细 */
+.ov-day-block {
+  margin-bottom: 8px;
+}
+
+.ov-day-block:last-of-type {
+  margin-bottom: 0;
+}
+
+.ov-stops {
+  list-style: none;
+  margin: 2px 0 0;
+  padding-left: 34px;
+}
+
+.ov-stops li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+
+.ov-stops li:hover {
+  background: #f2f6ff;
+}
+
+.ov-stop-no {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #eef1f5;
+  color: var(--muted);
+  font-size: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+}
+
+.ov-stop-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 /* ─────────── 地图标记与提示 ─────────── */
@@ -833,10 +847,6 @@ input[type='date'] {
   font-size: 12.5px;
 }
 
-.t-stats {
-  font-size: 13px;
-}
-
 .t-foot {
   display: flex;
   align-items: center;
@@ -933,37 +943,161 @@ details.steps li {
   background: var(--line);
 }
 
-.day-head {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.day-title {
-  font-size: 16px;
-  font-weight: 700;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.day-date {
-  font-size: 12.5px;
-  color: var(--muted);
-  font-weight: 400;
-}
-
-.route-line {
-  font-size: 12.5px;
-  color: var(--muted);
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-
 .ops-row {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* ─────────── 添加节点：全屏选点页（上搜索、背后地图） ─────────── */
+.mapwrap.picker-open {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: block;
+}
+
+.picker-panel {
+  position: fixed;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(520px, 92vw);
+  z-index: 1300;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: 0 10px 36px rgba(10, 25, 60, 0.25);
+  padding: 10px;
+}
+
+.picker-top {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+/* 城市选择（可搜索） */
+.city-select {
+  position: relative;
+  flex: none;
+}
+
+.city-select-btn {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 96px;
+  padding: 6px 8px;
+  font: inherit;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.city-select-btn:hover {
+  border-color: #c9d4e4;
+}
+
+.city-caret {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.city-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  z-index: 20;
+  width: 150px;
+  padding: 6px;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.city-search {
+  width: 100% !important;
+  padding: 4px 8px;
+  margin-bottom: 4px;
+}
+
+.city-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.city-list li {
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.city-list li:hover {
+  background: #f2f6ff;
+}
+
+.city-list li.active {
+  color: var(--brand);
+  font-weight: 600;
+}
+
+.city-empty {
+  cursor: default;
+}
+
+.picker-input {
+  flex: 1;
+  min-width: 0;
+}
+
+.picker-status {
+  padding: 6px 2px 0;
+  font-size: 12.5px;
+}
+
+.picker-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  max-height: 42vh;
+  overflow: auto;
+}
+
+.picker-list li {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  padding: 7px 6px;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.picker-list li:hover {
+  background: #f2f6ff;
+}
+
+.mk-mini {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+  margin-top: 2px;
+}
+
+.picker-item-body {
+  min-width: 0;
+}
+
+.picker-tip {
+  margin-top: 8px;
+  font-size: 12px;
 }

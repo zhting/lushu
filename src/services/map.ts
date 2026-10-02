@@ -1,4 +1,4 @@
-import type { MapProvider, Poi, RoutePolicy, RouteResult, Stop } from '../types'
+import type { MapProvider, Poi } from '../types'
 import * as amapSvc from './amap'
 import * as osmSvc from './osm'
 
@@ -21,7 +21,7 @@ export function loadMapLib(key = '', securityJsCode = ''): Promise<any> {
 }
 
 export function searchPlaces(kw: string, city = ''): Promise<Poi[]> {
-  return provider === 'amap' ? amapSvc.searchPlaces(kw, city) : osmSvc.searchPlaces(kw)
+  return provider === 'amap' ? amapSvc.searchPlaces(kw, city) : osmSvc.searchPlaces(kw, city)
 }
 
 export function reverseGeocode(lng: number, lat: number): Promise<{ name: string; address: string }> {
@@ -32,6 +32,12 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   return provider === 'amap' ? amapSvc.currentPosition() : osmSvc.currentPosition()
 }
 
-export function fetchRoute(points: Stop[], policy: RoutePolicy): Promise<RouteResult> {
-  return provider === 'amap' ? amapSvc.fetchRoute(points, policy) : osmSvc.fetchRoute(points, policy)
+/** 相邻两点间的车行导航线路（距离 + 折线） */
+export function legRoute(
+  a: { lng: number; lat: number },
+  b: { lng: number; lat: number },
+  key = '',
+  securityJsCode = '',
+): Promise<{ distanceM: number; path: [number, number][] }> {
+  return provider === 'amap' ? amapSvc.legRoute(a, b, key, securityJsCode) : osmSvc.legRoute(a, b)
 }

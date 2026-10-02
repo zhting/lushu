@@ -1,4 +1,4 @@
-import type { StopKind } from '../types'
+import type { StopKind } from './types'
 
 export interface SamplePoi {
   name: string

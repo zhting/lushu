@@ -1,17 +1,16 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { useTripStore } from '../stores/trip'
-import { fmtDistance, fmtDuration, todayStr } from '../services/geo'
+import { todayStr } from '../services/geo'
 import { DAY_COLORS } from '../constants'
 
 const store = useTripStore()
 const showCreate = ref(false)
 const title = ref('')
 const startDate = ref(todayStr())
-const dayCount = ref(3)
 
 function create() {
-  store.createTrip(title.value, startDate.value, dayCount.value)
+  store.createTrip(title.value, startDate.value, 1)
 }
 
 function fmtSavedAt(ts: number): string {
@@ -62,15 +61,9 @@ function stripStyle(i: number) {
           <label>行程名称</label>
           <input v-model="title" placeholder="例如：国庆草原环线" @keyup.enter="create" />
         </div>
-        <div class="row2">
-          <div class="field">
-            <label>出发日期</label>
-            <input v-model="startDate" type="date" />
-          </div>
-          <div class="field">
-            <label>天数（可随时增减）</label>
-            <input v-model.number="dayCount" type="number" min="1" max="30" />
-          </div>
+        <div class="field">
+          <label>出发日期</label>
+          <input v-model="startDate" type="date" />
         </div>
         <button class="btn btn-primary" @click="create">创建路书</button>
         <div class="divider">或者</div>
@@ -93,10 +86,6 @@ function stripStyle(i: number) {
           <div class="trip-card-body">
             <div class="t-title">{{ s.title }}</div>
             <div class="t-meta">📅 {{ s.startDate }} · {{ s.days }} 天</div>
-            <div class="t-stats" v-if="s.doneDays">
-              🚗 {{ fmtDistance(s.dist) }} · ⏱ {{ fmtDuration(s.dur) }}
-            </div>
-            <div class="t-stats muted" v-else>尚未计算路线</div>
             <div class="t-foot">
               <span class="muted">{{ fmtSavedAt(s.savedAt) }}</span>
               <button class="icon-btn" title="删除" @click.stop="store.deleteTrip(s.id)">🗑</button>

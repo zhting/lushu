@@ -28,18 +28,17 @@ function close() {
       <div class="provider-cards">
         <div class="provider-card">
           <div class="p-title">🌍 开源地图 <span class="chip">推荐测试用</span></div>
-          <p class="muted">Leaflet + OpenStreetMap 瓦片，路线用 OSRM 演示服务，POI 搜索用 Nominatim。</p>
+          <p class="muted">Leaflet + OpenStreetMap 瓦片，POI 搜索用 Nominatim。</p>
           <ul class="p-list">
             <li>✅ 无需申请任何 Key，打开即用</li>
             <li>⚠️ 国内地点数据较稀疏，搜索结果有限</li>
-            <li>⚠️ OSRM 演示服务仅默认策略，过路费不可用</li>
           </ul>
           <button class="btn btn-primary" @click="useOsm">使用开源地图开始</button>
         </div>
 
         <div class="provider-card">
           <div class="p-title">🇨🇳 高德地图 <span class="chip">正式模式</span></div>
-          <p class="muted">国内数据、搜索与路径规划质量更好，支持过路费与路线策略。</p>
+          <p class="muted">国内地点数据与搜索质量更好，结果更准确。</p>
           <div class="field">
             <label>高德 Key（类型须为「Web端(JS API)」）</label>
             <input v-model="key" placeholder="在 console.amap.com 申请" autocomplete="off" />
@@ -64,9 +63,9 @@ function close() {
       </details>
 
       <p class="muted" style="margin: 10px 0 0">
-        ⚠️ 两种地图坐标系不同（开源 WGS-84 / 高德 GCJ-02），切换数据源会清空路线缓存并重算，同一坐标可能显示偏移数百米，请勿混用。
+        ⚠️ 两种地图坐标系不同（开源 WGS-84 / 高德 GCJ-02），切换数据源后同一坐标可能显示偏移数百米，请勿混用。
       </p>
-      <button v-if="store.setupDone" class="btn btn-block" style="margin-top: 8px" @click="close">
+      <button class="btn btn-block" style="margin-top: 8px" @click="close">
         取消，返回当前地图
       </button>
     </div>

@@ -1,5 +1,4 @@
 export type StopKind = 'waypoint' | 'scenic' | 'hotel' | 'food' | 'fuel'
-export type RoutePolicy = 'fastest' | 'shortest' | 'leastFee'
 export type MapProvider = 'osm' | 'amap'
 
 export interface Stop {
@@ -25,48 +24,20 @@ export interface Trip {
   id: string
   title: string
   startDate: string // yyyy-mm-dd
-  policy: RoutePolicy
-  driveWarnMinutes: number // 单日驾驶提醒阈值
   days: Day[]
 }
 
-/** 本地存储中的一份路书（含路线缓存） */
+/** 本地存储中的一份路书 */
 export interface StoredTrip {
   id: string
   savedAt: number
   trip: Trip
-  routes: Record<string, RouteMeta>
-  paths: Record<string, [number, number][]>
-}
-
-/** 相邻两个节点之间的行车数据 */
-export interface RouteLeg {
-  distanceM: number
-  durationS: number
-}
-
-export interface RouteMeta {
-  status: 'pending' | 'done' | 'error'
-  hash: string
-  distanceM: number
-  durationS: number
-  tolls: number | null
-  legs: RouteLeg[] | null // 接口不支持分段时为 null
-  error: string
 }
 
 export interface Poi {
   name: string
   address: string
-  district: string
+  district?: string
   lng: number
   lat: number
-}
-
-export interface RouteResult {
-  distanceM: number
-  durationS: number
-  tolls: number | null
-  legs: RouteLeg[] | null
-  path: [number, number][]
 }

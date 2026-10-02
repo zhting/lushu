@@ -1,21 +1,15 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { Day, MapProvider, Poi, RouteMeta, RoutePolicy, Stop, StopKind, StoredTrip, Trip } from '../types'
+import type { Day, MapProvider, Poi, Stop, StopKind, StoredTrip, Trip } from '../types'
 import * as mapSvc from '../services/map'
-import { hashPoints, haversineKm, parseHM, todayStr } from '../services/geo'
+import { cnOrdinal, todayStr } from '../services/geo'
 import { uid } from '../services/id'
-import { DAY_COLORS, DEFAULT_DRIVE_WARN_MINUTES, KIND_META, MAX_STOPS } from '../constants'
+import { DAY_COLORS, KIND_META } from '../constants'
 import { SAMPLE_DAYS, SAMPLE_TITLE } from '../sample'
 
 const LS_TRIPS = 'lushu.trips.v2' // 路书库
 const LS_TRIP_V1 = 'lushu.trip.v1' // 旧版单路书，仅用于迁移
 const LS_MAPCFG = 'lushu.mapcfg.v1'
-
-/**
- * 路线折线数据量大（单日可达上万点），不放进 Pinia 响应式，
- * 按路线 hash 存这里，地图组件直接读取；持久化时一并写盘。
- */
-export const pathCache = new Map<string, [number, number][]>()
 
 function emptyDay(): Day {
   return { id: uid('day'), departTime: '08:00', startAuto: true, stops: [], note: '' }
@@ -68,20 +62,21 @@ export const useTripStore = defineStore('trip', () => {
   // ───────────────────────── 基础状态 ─────────────────────────
   const trip = ref<Trip | null>(null)
   const currentId = ref<string | null>(null) // 当前打开的路书 id
-  const page = ref<'home' | 'trip'>('home') // 首页（路书列表） / 行程编辑
+  const page = ref<'home' | 'overview' | 'trip'>('home') // 首页（路书列表）/ 总览页 / 日程编辑
   const savedTrips = reactive<{ list: StoredTrip[] }>({ list: [] })
   const view = ref<string>('overview') // 'overview' | dayId
-  const routes = reactive<Record<string, RouteMeta>>({})
-  const pickTarget = ref<{ dayId: string } | null>(null)
+  const pickTarget = ref<{ dayId: string; stopId?: string } | null>(null) // 选点目标：带 stopId 为替换该节点位置
   const toast = ref<{ text: string; kind: 'info' | 'error' } | null>(null)
   const mapCfg = reactive<{ provider: MapProvider; key: string; securityJsCode: string }>({
     provider: 'osm',
     key: '',
     securityJsCode: '',
   })
-  const setupDone = ref(false) // 是否已完成数据源选择（决定首屏显示选择页还是主界面）
   const gateOpen = ref(false) // 从顶栏主动打开数据源选择页
   const mapOpen = ref(false) // 移动端：地图按需全屏展开（桌面端地图常驻，不受影响）
+  const pickerOpen = ref(false) // 「添加节点」全屏选点页：上搜索、背后地图
+  const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
+  const pickerCity = ref('') // 选点页限定的城市（'' = 不限），打开选点页间保持上次选择
 
   let toastTimer = 0
   function notify(text: string, kind: 'info' | 'error' = 'info') {
@@ -98,7 +93,6 @@ export const useTripStore = defineStore('trip', () => {
         mapCfg.provider = saved.provider
         mapCfg.key = saved.key || ''
         mapCfg.securityJsCode = saved.securityJsCode || ''
-        setupDone.value = true
       }
     } catch { /* 忽略损坏数据 */ }
     mapSvc.setProvider(mapCfg.provider)
@@ -112,7 +106,7 @@ export const useTripStore = defineStore('trip', () => {
       try {
         const legacy = JSON.parse(localStorage.getItem(LS_TRIP_V1) || 'null')
         if (legacy?.trip?.days?.length) {
-          savedTrips.list = [{ id: uid('trip'), savedAt: Date.now(), trip: migrateTrip(legacy.trip), routes: legacy.routes ?? {}, paths: legacy.paths ?? {} }]
+          savedTrips.list = [{ id: uid('trip'), savedAt: Date.now(), trip: migrateTrip(legacy.trip) }]
           persistTrips()
         }
       } catch { /* 忽略损坏数据 */ }
@@ -125,25 +119,9 @@ export const useTripStore = defineStore('trip', () => {
     saveTimer = window.setTimeout(saveNow, 400)
   }
 
-  function collectSave() {
-    const routeMeta: Record<string, RouteMeta> = {}
-    const paths: Record<string, [number, number][]> = {}
-    if (trip.value) {
-      for (const d of trip.value.days) {
-        const r = routes[d.id]
-        if (!r) continue
-        routeMeta[d.id] = r
-        const p = pathCache.get(r.hash)
-        if (p) paths[r.hash] = p
-      }
-    }
-    return { routeMeta, paths }
-  }
-
-  function persistTrips(stripPaths = false): boolean {
+  function persistTrips(): boolean {
     try {
-      const payload = savedTrips.list.map((e) => (stripPaths ? { ...e, paths: {} } : e))
-      localStorage.setItem(LS_TRIPS, JSON.stringify(payload))
+      localStorage.setItem(LS_TRIPS, JSON.stringify(savedTrips.list))
       return true
     } catch {
       return false
@@ -153,21 +131,14 @@ export const useTripStore = defineStore('trip', () => {
   function saveNow() {
     const t = trip.value
     if (!t || !currentId.value) return
-    const { routeMeta, paths } = collectSave()
-    const entry: StoredTrip = { id: currentId.value, savedAt: Date.now(), trip: t, routes: routeMeta, paths }
+    const entry: StoredTrip = { id: currentId.value, savedAt: Date.now(), trip: t }
     const i = savedTrips.list.findIndex((e) => e.id === entry.id)
     if (i >= 0) savedTrips.list.splice(i, 1, entry)
     else savedTrips.list.unshift(entry)
-    if (!persistTrips()) {
-      // 存储超限：丢弃折线缓存再试
-      entry.paths = {}
-      if (persistTrips(true)) notify('本地存储空间不足，已仅保存行程数据（路线折线缓存已丢弃）', 'error')
-      else notify('浏览器本地存储空间不足，修改可能未被保存', 'error')
-    }
+    if (!persistTrips()) notify('浏览器本地存储空间不足，修改可能未被保存', 'error')
   }
 
   // ───────────────────────── 数据源管理（开源 OSM / 高德） ─────────────────────────
-  const mapConfigured = computed(() => mapCfg.provider === 'osm' || !!mapCfg.key)
 
   function persistMapCfg() {
     localStorage.setItem(
@@ -176,69 +147,33 @@ export const useTripStore = defineStore('trip', () => {
     )
   }
 
-  /** 选择地图数据源。两种地图坐标系不同（WGS-84 / GCJ-02），切换会清空路线缓存并重算。 */
+  /** 选择地图数据源。两种地图坐标系不同（WGS-84 / GCJ-02），切换后旧线路作废并全部重算。 */
   function applyProvider(provider: MapProvider, key = '', securityJsCode = '') {
     const changed = mapCfg.provider !== provider
     mapCfg.provider = provider
     mapCfg.key = key.trim()
     mapCfg.securityJsCode = securityJsCode.trim()
-    setupDone.value = true
     gateOpen.value = false
     mapSvc.setProvider(provider)
     persistMapCfg()
-    revalidateAllRoutes(changed)
-  }
-
-  /** 全部天重新校验路线缓存：hash 不一致或缺折线的天才真正重算，其余复用缓存 */
-  function revalidateAllRoutes(bySwitch = false) {
-    const t = trip.value
-    if (!t) {
-      saveNow()
-      return
+    if (changed) {
+      // 坐标系不同，旧的车行线路/距离不可混用
+      Object.keys(legDistances).forEach((k) => delete legDistances[k])
+      Object.keys(legPaths).forEach((k) => delete legPaths[k])
+      notify(mapCfg.provider === 'osm' ? '已切换到开源地图（OpenStreetMap），线路将重新计算' : '已切换到高德地图，线路将重新计算')
     }
-    for (const d of t.days) {
-      const r = routes[d.id]
-      const pts = routePoints(d)
-      const h = pts.length >= 2 ? hashPoints(pts, t.policy, mapCfg.provider) : ''
-      if (!r || r.hash !== h || (r.status === 'done' && !pathCache.has(r.hash))) {
-        delete routes[d.id]
-        touch(d.id)
-      }
-    }
-    if (bySwitch) {
-      notify(
-        mapCfg.provider === 'osm'
-          ? '已切换到开源地图（OpenStreetMap），路线将重新计算'
-          : '已切换到高德地图，路线将重新计算',
-      )
-    }
-    saveNow()
+    retryLegs()
   }
 
   // ───────────────────────── 路书库（首页列表） ─────────────────────────
   const tripSummaries = computed(() =>
-    savedTrips.list.map((e) => {
-      let dist = 0
-      let dur = 0
-      let doneDays = 0
-      for (const m of Object.values(e.routes ?? {})) {
-        if (m?.status === 'done') {
-          dist += m.distanceM
-          dur += m.durationS
-          doneDays++
-        }
-      }
-      return {
-        id: e.id,
-        title: e.trip.title,
-        startDate: e.trip.startDate,
-        days: e.trip.days.length,
-        savedAt: e.savedAt,
-        dist,
-        dur,
-        doneDays,
-      }
-    }),
+    savedTrips.list.map((e) => ({
+      id: e.id,
+      title: e.trip.title,
+      startDate: e.trip.startDate,
+      days: e.trip.days.length,
+      savedAt: e.savedAt,
+    })),
   )
 
   function openTrip(id: string) {
@@ -246,21 +181,54 @@ export const useTripStore = defineStore('trip', () => {
     if (!entry) return
     trip.value = migrateTrip(entry.trip)
     currentId.value = id
-    Object.keys(routes).forEach((k) => delete routes[k])
-    pathCache.clear()
-    for (const [dayId, meta] of Object.entries(entry.routes ?? {})) {
-      routes[dayId] = meta as RouteMeta
-      const p = (entry.paths ?? {})[(meta as RouteMeta).hash]
-      if (p) pathCache.set((meta as RouteMeta).hash, p)
-    }
-    view.value = 'overview'
+    view.value = trip.value?.days[0]?.id ?? 'overview'
     page.value = 'trip'
-    revalidateAllRoutes()
+    trip.value?.days.forEach((d) => touchLegs(d.id)) // 会话内重算各段距离（坐标对缓存命中则零请求）
+    saveNow()
   }
 
   function goHome() {
     saveNow()
     page.value = 'home'
+  }
+
+  /** 顶栏「总览」：进入独立总览页（地图显示全部天） */
+  function goOverview() {
+    if (!trip.value) return
+    view.value = 'overview'
+    page.value = 'overview'
+  }
+
+  /** 从总览页返回日程列表，默认展开第一天 */
+  function goDays() {
+    if (!trip.value) return
+    page.value = 'trip'
+    view.value = trip.value.days[0]?.id ?? 'overview'
+  }
+
+  /** 顶栏「地图」：全屏查看整个路书（全部天）的路线，关闭后恢复之前展开的天 */
+  const mapReturnView = ref<string | null>(null)
+
+  function openMapOverview() {
+    if (!trip.value) return
+    if (view.value !== 'overview') mapReturnView.value = view.value
+    view.value = 'overview'
+    mapOpen.value = true
+  }
+
+  function closeMap() {
+    mapOpen.value = false
+    if (mapReturnView.value) {
+      view.value = mapReturnView.value
+      mapReturnView.value = null
+    }
+  }
+
+  /** 每天标题上的地图图标：地图定位并展示该天路线 */
+  function showDayOnMap(dayId: string) {
+    if (!findDay(dayId)) return
+    view.value = dayId
+    mapOpen.value = true
   }
 
   function deleteTrip(id: string) {
@@ -273,8 +241,6 @@ export const useTripStore = defineStore('trip', () => {
     if (currentId.value === id) {
       trip.value = null
       currentId.value = null
-      Object.keys(routes).forEach((k) => delete routes[k])
-      pathCache.clear()
       page.value = 'home'
     }
   }
@@ -284,8 +250,7 @@ export const useTripStore = defineStore('trip', () => {
     else page.value = 'home'
   }
 
-  // ───────────────────────── 路线计算（带缓存） ─────────────────────────
-  const timers: Record<string, number> = {}
+  // ───────────────────────── 天与地点（纯顺序结构） ─────────────────────────
 
   function findDay(dayId: string): Day | undefined {
     return trip.value?.days.find((d) => d.id === dayId)
@@ -296,8 +261,8 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   /**
-   * 当天参与路线计算的点序列。
-   * 次日（startAuto）默认从前一天最后一个节点出发，因此会把 prevLast 拼在最前面。
+   * 当天参与绘图/接续的点序列。
+   * 次日（startAuto）默认从前一天最后一个地点出发，因此会把 prevLast 拼在最前面。
    */
   function routePoints(day: Day): Stop[] {
     const i = dayIndex(day.id)
@@ -320,51 +285,67 @@ export const useTripStore = defineStore('trip', () => {
     return seq.length > 0 && seq[0] !== day.stops[0]
   }
 
-  function touch(dayId: string) {
-    const day = trip.value?.days.find((d) => d.id === dayId)
-    if (!day) return
-    const pts = routePoints(day)
+  // ───────────────────────── 相邻节点车行距离与线路 ─────────────────────────
+  /** key = dayId，值 = 相邻节点间车行距离（与 routePointsOf 序列一一对应，长度 = 点数-1）；拉取失败不写入 */
+  const legDistances = reactive<Record<string, number[]>>({})
+  /** key = dayId，值 = 该天逐段车行线路拼接后的折线（地图绘制用） */
+  const legPaths = reactive<Record<string, [number, number][]>>({})
+  const legTimers: Record<string, number> = {}
+  const legSeq: Record<string, number> = {}
+
+  function nextDayId(dayId: string): string | null {
+    const next = trip.value?.days[dayIndex(dayId) + 1]
+    return next?.id ?? null
+  }
+
+  /** 节点变化后防抖拉取本天各段车行线路 */
+  function touchLegs(dayId: string | null) {
+    if (!dayId || !findDay(dayId)) return
+    window.clearTimeout(legTimers[dayId])
+    legTimers[dayId] = window.setTimeout(() => void calcLegs(dayId), 600)
+  }
+
+  async function calcLegs(dayId: string) {
+    const pts = routePointsOf(dayId)
+    const seqId = (legSeq[dayId] ?? 0) + 1
+    legSeq[dayId] = seqId
     if (pts.length < 2) {
-      delete routes[dayId]
-      save()
+      delete legDistances[dayId]
+      delete legPaths[dayId]
       return
     }
-    const h = hashPoints(pts, trip.value!.policy, mapCfg.provider)
-    const cur = routes[dayId]
-    if (cur && cur.hash === h && cur.status !== 'error') return // 点没变，不重复请求
-    routes[dayId] = { status: 'pending', hash: h, distanceM: 0, durationS: 0, tolls: null, legs: null, error: '' }
-    window.clearTimeout(timers[dayId])
-    timers[dayId] = window.setTimeout(() => void calc(dayId, h), 600)
-    save()
-  }
-
-  async function calc(dayId: string, hash: string) {
-    const day = trip.value?.days.find((d) => d.id === dayId)
-    if (!day || !trip.value) return
-    const points = routePoints(day)
-    if (points.length < 2) return
+    const dists: number[] = []
+    const path: [number, number][] = []
     try {
-      const r = await mapSvc.fetchRoute(points, trip.value.policy)
-      if (routes[dayId]?.hash !== hash) return // 已过期（期间又被编辑）
-      pathCache.set(hash, r.path)
-      routes[dayId] = { status: 'done', hash, distanceM: r.distanceM, durationS: r.durationS, tolls: r.tolls, legs: r.legs, error: '' }
-    } catch (e: any) {
-      if (routes[dayId]?.hash !== hash) return
-      routes[dayId] = { status: 'error', hash, distanceM: 0, durationS: 0, tolls: null, legs: null, error: e?.message || '路线计算失败' }
+      for (let i = 1; i < pts.length; i++) {
+        // 逐段顺序请求并留出间隔，避免触发公共服务的频率限制；单段失败重试一次
+        if (i > 1) await new Promise((r) => setTimeout(r, 400))
+        let r: { distanceM: number; path: [number, number][] }
+        try {
+          r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
+        } catch {
+          await new Promise((r2) => setTimeout(r2, 900))
+          r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
+        }
+        if (legSeq[dayId] !== seqId) return // 期间又被编辑，丢弃过期结果
+        dists.push(r.distanceM)
+        path.push(...r.path)
+      }
+    } catch {
+      if (legSeq[dayId] !== seqId) return
+      delete legDistances[dayId] // 重试后仍失败：距离回退直线、地图回退虚线
+      delete legPaths[dayId]
+      return
     }
+    if (legSeq[dayId] !== seqId) return
+    legDistances[dayId] = dists
+    legPaths[dayId] = path
     save()
   }
 
-  function recalc(dayId: string) {
-    delete routes[dayId]
-    touch(dayId)
-  }
-
-  /** 当天的节点/顺序变化可能改变前一天末节点 → 影响次日的接续起点 */
-  function touchNext(dayId: string) {
-    const i = dayIndex(dayId)
-    const next = trip.value?.days[i + 1]
-    if (next) touch(next.id)
+  /** 重新拉取当前行程所有天的车行线路（数据源切换 / 地图库就绪后调用；坐标对缓存命中则零请求） */
+  function retryLegs() {
+    trip.value?.days.forEach((d) => touchLegs(d.id))
   }
 
   // ───────────────────────── 行程 / 日程编辑 ─────────────────────────
@@ -373,14 +354,10 @@ export const useTripStore = defineStore('trip', () => {
       id: uid('trip'),
       title: title.trim() || '未命名行程',
       startDate: startDate || todayStr(),
-      policy: 'fastest',
-      driveWarnMinutes: DEFAULT_DRIVE_WARN_MINUTES,
       days: Array.from({ length: Math.max(1, Math.min(30, dayCount)) }, emptyDay),
     }
     trip.value = t
     currentId.value = t.id
-    Object.keys(routes).forEach((k) => delete routes[k])
-    pathCache.clear()
     view.value = t.days[0].id
     page.value = 'trip'
     saveNow()
@@ -402,8 +379,8 @@ export const useTripStore = defineStore('trip', () => {
       if (sd.end) stops.push(mkStop(sd.end, 'hotel'))
       day.stops = stops
     })
-    days.forEach((d) => touch(d.id))
     view.value = days[0].id
+    trip.value?.days.forEach((d) => touchLegs(d.id))
     saveNow()
   }
 
@@ -421,18 +398,6 @@ export const useTripStore = defineStore('trip', () => {
     }
   }
 
-  function setPolicy(p: RoutePolicy) {
-    if (!trip.value) return
-    trip.value.policy = p
-    trip.value.days.forEach((d) => recalc(d.id)) // 策略变了重新计算所有天
-  }
-
-  function setDriveWarn(minutes: number) {
-    if (!trip.value) return
-    trip.value.driveWarnMinutes = Math.max(60, Math.min(1440, Math.round(minutes) || DEFAULT_DRIVE_WARN_MINUTES))
-    save()
-  }
-
   function setDayCount(n: number) {
     const t = trip.value
     if (!t) return
@@ -442,30 +407,40 @@ export const useTripStore = defineStore('trip', () => {
       const removeCount = t.days.length - n
       if (!window.confirm(`将删除最后 ${removeCount} 天的日程及其全部地点，确定？`)) return
       t.days.splice(n)
-      if (view.value !== 'overview' && !t.days.some((d) => d.id === view.value)) view.value = 'overview'
-      Object.keys(routes).forEach((id) => {
-        if (!t.days.some((d) => d.id === id)) delete routes[id]
-      })
     } else {
       while (t.days.length < n) t.days.push(emptyDay())
     }
-    t.days.forEach((d) => touch(d.id))
+    if (!t.days.some((d) => d.id === view.value)) view.value = t.days[0]?.id ?? 'overview'
+    t.days.forEach((d) => touchLegs(d.id))
     saveNow()
   }
 
-  // ── 节点（每天一个有序列表，无固定起点/终点） ──
+  /** 删除单独一天（至少保留一天） */
+  function deleteDay(dayId: string) {
+    const t = trip.value
+    if (!t) return
+    if (t.days.length <= 1) {
+      notify('至少保留一天', 'error')
+      return
+    }
+    const i = t.days.findIndex((d) => d.id === dayId)
+    if (i < 0) return
+    if (!window.confirm(`删除第${cnOrdinal(i + 1)}天及其全部地点？`)) return
+    t.days.splice(i, 1)
+    if (view.value === dayId) view.value = t.days[Math.min(i, t.days.length - 1)].id
+    t.days.forEach((d) => touchLegs(d.id))
+    saveNow()
+  }
+
+  // ── 节点（每天一个有序列表，无固定起点/终点，不设数量上限） ──
   function addStop(dayId: string, poi: Poi, kind: StopKind = 'waypoint'): boolean {
     const day = findDay(dayId)
     if (!day) return false
-    if (day.stops.length >= MAX_STOPS) {
-      notify(`单日节点最多 ${MAX_STOPS} 个`, 'error')
-      return false
-    }
     const s = mkStop(poi, kind)
     s.stayMinutes = defaultStay(kind)
     day.stops.push(s)
-    touch(dayId)
-    touchNext(dayId) // 本天末节点变化 → 次日接续起点变化
+    touchLegs(dayId)
+    save()
     return true
   }
 
@@ -475,8 +450,9 @@ export const useTripStore = defineStore('trip', () => {
     const idx = day.stops.findIndex((s) => s.id === stopId)
     if (idx < 0) return
     day.stops.splice(idx, 1)
-    touch(dayId)
-    touchNext(dayId)
+    touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
+    save()
   }
 
   function moveStop(dayId: string, from: number, to: number) {
@@ -485,14 +461,14 @@ export const useTripStore = defineStore('trip', () => {
     if (from < 0 || to < 0 || from >= day.stops.length || to >= day.stops.length || from === to) return
     const [s] = day.stops.splice(from, 1)
     day.stops.splice(to, 0, s)
-    touch(dayId)
-    touchNext(dayId)
+    touchLegs(dayId)
+    save()
   }
 
-  /** vuedraggable 直接改了数组，这里只负责触发重算 */
-  function dragReordered(dayId: string) {
-    touch(dayId)
-    touchNext(dayId)
+  /** 拖拽排序：vuedraggable 已直接修改数组，这里只负责刷新距离与保存 */
+  function reorderStops(dayId: string) {
+    touchLegs(dayId)
+    save()
   }
 
   /** 更换已有节点的地点（保留类型/停留设置） */
@@ -504,8 +480,9 @@ export const useTripStore = defineStore('trip', () => {
     s.lng = poi.lng
     s.lat = poi.lat
     s.address = poi.address || poi.district || ''
-    touch(dayId)
-    touchNext(dayId)
+    touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
+    save()
   }
 
   /** 重命名节点 */
@@ -543,16 +520,61 @@ export const useTripStore = defineStore('trip', () => {
     const i = dayIndex(dayId)
     if (!day || i <= 0) return
     day.startAuto = !day.startAuto
-    touch(dayId)
+    touchLegs(dayId)
+    save()
   }
 
-  /** 地图点选落点：一律追加为节点 */
-  function applyPicked(target: { dayId: string }, poi: Poi) {
-    addStop(target.dayId, poi)
+  /** 地图点选落点（点击地图任意位置，逆地理命名）：新增节点或替换节点位置 */
+  function applyPicked(target: { dayId: string; stopId?: string }, poi: Poi) {
+    if (target.stopId) {
+      // 替换位置：保留节点名称，仅更新坐标与地址
+      const s = findDay(target.dayId)?.stops.find((w) => w.id === target.stopId)
+      if (s) {
+        s.lng = poi.lng
+        s.lat = poi.lat
+        s.address = poi.address || poi.district || ''
+        touchLegs(target.dayId)
+        save()
+      }
+    } else {
+      addStop(target.dayId, poi)
+    }
+    closePicker()
+  }
+
+  // ───────────────────────── 添加 / 修改节点（全屏选点页） ─────────────────────────
+  function openPicker(dayId: string) {
+    pickTarget.value = { dayId }
+    pickerResults.value = []
+    pickerOpen.value = true
+    mapOpen.value = true // 移动端同时展开地图；桌面端此值无副作用
+  }
+
+  /** 修改节点：全屏选点页上同时编辑名称/类型/停留，并在地图上选新位置替换 */
+  function openStopEditor(dayId: string, stopId: string) {
+    pickTarget.value = { dayId, stopId }
+    pickerResults.value = []
+    pickerOpen.value = true
+    mapOpen.value = true
+  }
+
+  function closePicker() {
+    pickerOpen.value = false
+    pickerResults.value = []
     pickTarget.value = null
+    mapOpen.value = false
   }
 
-  // ───────────────────────── 统计 / 时间轴 ─────────────────────────
+  /** 点击地图上的搜索结果标记（或结果列表项）：新增节点或替换节点位置 */
+  function pickSearchResult(poi: Poi) {
+    const t = pickTarget.value
+    if (!pickerOpen.value || !t) return
+    if (t.stopId) updateStopPlace(t.dayId, t.stopId, poi)
+    else addStop(t.dayId, poi)
+    closePicker()
+  }
+
+  // ───────────────────────── 统计 ─────────────────────────
   const dayStats = computed(() => {
     const t = trip.value
     if (!t) return []
@@ -560,91 +582,12 @@ export const useTripStore = defineStore('trip', () => {
       index: i,
       day: d,
       color: DAY_COLORS[i % DAY_COLORS.length],
-      route: routes[d.id] ?? null,
     }))
   })
 
-  const totals = computed(() => {
-    let dist = 0
-    let dur = 0
-    let fee = 0
-    let feeKnown = true
-    let warns = 0
-    let okDays = 0
-    for (const s of dayStats.value) {
-      if (s.route?.status === 'done') {
-        dist += s.route.distanceM
-        dur += s.route.durationS
-        okDays++
-        if (s.route.tolls != null) fee += s.route.tolls
-        else feeKnown = false
-        if (s.route.durationS / 60 > (trip.value?.driveWarnMinutes ?? DEFAULT_DRIVE_WARN_MINUTES)) warns++
-      }
-    }
-    return { dist, dur, fee: feeKnown ? fee : null, warns, okDays, days: dayStats.value.length }
-  })
-
-  function overDrive(dayId: string): boolean {
-    const m = routes[dayId]
-    return !!m && m.status === 'done' && m.durationS / 60 > (trip.value?.driveWarnMinutes ?? DEFAULT_DRIVE_WARN_MINUTES)
-  }
-
-  /**
-   * 某节点相对上一节点的行车数据。
-   * 优先用接口返回的分段（OSRM legs），否则用直线距离 × 全程均速估算。
-   */
-  function segmentInfo(dayId: string, seqIndex: number): { distanceM: number; driveMin: number; approx: boolean } | null {
-    const day = findDay(dayId)
-    const r = routes[dayId]
-    if (!day || r?.status !== 'done') return null
-    const seq = routePoints(day)
-    if (seqIndex <= 0 || seqIndex >= seq.length) return null
-    if (r.legs && r.legs.length === seq.length - 1) {
-      return { distanceM: r.legs[seqIndex - 1].distanceM, driveMin: Math.round(r.legs[seqIndex - 1].durationS / 60), approx: false }
-    }
-    const km = haversineKm(seq[seqIndex - 1], seq[seqIndex])
-    const speed = r.durationS > 0 ? r.distanceM / r.durationS : 22 // m/s，约 80km/h
-    return { distanceM: Math.round(km * 1000), driveMin: Math.round((km * 1000) / speed / 60), approx: true }
-  }
-
-  /**
-   * 时间轴推算：出发时间 + 各段驾驶时长 + 停留时长。
-   * 优先用接口分段数据；否则按直线距离比例分摊。
-   */
-  function timeline(dayId: string) {
-    const t = trip.value
-    const day = t?.days.find((d) => d.id === dayId)
-    const r = routes[dayId]
-    if (!t || !day || r?.status !== 'done') return null
-    const seq = routePoints(day)
-    if (seq.length < 2) return null
-    const fromPrev = seq[0] !== day.stops[0]
-    const driveTotal = r.durationS / 60
-    const legs = r.legs && r.legs.length === seq.length - 1 ? r.legs : null
-    const straights: number[] = []
-    for (let i = 1; i < seq.length; i++) straights.push(haversineKm(seq[i - 1], seq[i]))
-    const sumS = straights.reduce((a, b) => a + b, 0)
-    let clock = parseHM(day.departTime)
-    return seq.map((stop, i) => {
-      const isEnd = i === seq.length - 1
-      const driveMin =
-        i === 0
-          ? 0
-          : legs
-            ? Math.round(legs[i - 1].durationS / 60)
-            : Math.round(sumS > 0 ? (straights[i - 1] / sumS) * driveTotal : driveTotal / Math.max(1, seq.length - 1))
-      const arrive = clock + (i === 0 ? 0 : driveMin)
-      const stay = isEnd ? 0 : stop.stayMinutes
-      const depart = arrive + stay
-      clock = depart
-      return { stop, driveMin, arrive, depart, isEnd, fromPrev: i === 0 && fromPrev }
-    })
-  }
-
   // ───────────────────────── 导入 / 导出 ─────────────────────────
   function exportJson(): string {
-    const { routeMeta, paths } = collectSave()
-    return JSON.stringify({ version: 2, exportedAt: new Date().toISOString(), trip: trip.value, routes: routeMeta, paths })
+    return JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), trip: trip.value })
   }
 
   /** 导入：作为新路程加入路书库并打开 */
@@ -655,27 +598,23 @@ export const useTripStore = defineStore('trip', () => {
     const id = typeof t.id === 'string' && t.id && !savedTrips.list.some((e) => e.id === t.id) ? t.id : uid('trip')
     trip.value = migrateTrip({ ...t, id })
     currentId.value = id
-    Object.keys(routes).forEach((k) => delete routes[k])
-    pathCache.clear()
-    for (const [dayId, meta] of Object.entries(data.routes ?? {})) routes[dayId] = meta as RouteMeta
-    for (const [h, p] of Object.entries(data.paths ?? {})) pathCache.set(h, p as [number, number][])
-    view.value = 'overview'
+    view.value = trip.value?.days[0]?.id ?? 'overview'
     page.value = 'trip'
-    revalidateAllRoutes()
+    trip.value?.days.forEach((d) => touchLegs(d.id))
     saveNow()
   }
 
   return {
-    trip, currentId, page, savedTrips, view, routes, pickTarget, toast, mapCfg, setupDone, gateOpen, mapConfigured, mapOpen,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, gateOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legPaths,
     tripSummaries,
     init, notify, save, saveNow,
-    applyProvider,
-    touch, recalc, dragReordered,
-    createTrip, loadSample, openTrip, goHome, deleteTrip, deleteCurrentTrip,
-    setTitle, setStartDate, setPolicy, setDriveWarn, setDayCount,
-    addStop, removeStop, moveStop, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,
-    routePointsOf, originFromPrev, segmentInfo,
-    dayStats, totals, overDrive, timeline,
+    applyProvider, retryLegs,
+    createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
+    setTitle, setStartDate, setDayCount, deleteDay,
+    addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,
+    openPicker, openStopEditor, closePicker, pickSearchResult,
+    routePointsOf, originFromPrev,
+    dayStats,
     exportJson, importJson,
   }
 })
