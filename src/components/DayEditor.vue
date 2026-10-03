@@ -21,9 +21,9 @@ const prevLast = computed(() => {
   return prev?.stops[prev.stops.length - 1] ?? null
 })
 
-/** 节点在整条路线中的序号（含继承的出发地） */
+/** 节点在整条路线中的自然序号 */
 function stationNumber(j: number): number {
-  return j + 1 + (fromPrev.value ? 1 : 0)
+  return j + 1
 }
 
 /** 获取地点类型的代表性图标（设计图中为房屋/景点微标） */
@@ -44,19 +44,18 @@ function kindIcon(kind?: StopKind): string {
 
 /** 本节点到下一节点的距离与耗时。优先车行导航距离与时长，未取到时回退直线 */
 function legText(j: number): string {
-  const k = j + (fromPrev.value ? 1 : 0)
-  if (k + 1 >= seq.value.length) return ''
+  if (!day.value || j + 1 >= day.value.stops.length) return ''
   const legs = store.legDistances[props.dayId]
   const durations = store.legDurations[props.dayId]
-  if (legs && legs.length === seq.value.length - 1) {
-    const d = legs[k]
-    const dur = durations?.[k]
+  if (legs && legs.length === day.value.stops.length - 1) {
+    const d = legs[j]
+    const dur = durations?.[j]
     if (d != null) {
       const durStr = dur ? fmtDuration(dur) : ''
       return durStr ? `车行约 ${fmtDistance(d)} · ${durStr}` : `车行约 ${fmtDistance(d)}`
     }
   }
-  const m = Math.round(haversineKm(seq.value[k], seq.value[k + 1]) * 1000)
+  const m = Math.round(haversineKm(day.value.stops[j], day.value.stops[j + 1]) * 1000)
   return m > 0 ? `直线约 ${fmtDistance(m)}` : ''
 }
 
@@ -124,6 +123,7 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
               <!-- 名称与橙红色编辑小铅笔 -->
               <div class="station-name-wrap" @click="store.openStopEditor(day.id, s.id)">
                 <span class="station-name">{{ s.name }}</span>
+                <span v-if="s.fromPrev" class="station-origin-badge" title="接续自前一天终点">接续出发</span>
                 <!-- 纯正橙色铅笔图标 -->
                 <button
                   class="pencil-edit-btn"

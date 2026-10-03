@@ -41,18 +41,82 @@ function migrateDay(d: any): Day {
   return { id: d.id ?? uid('day'), departTime: d.departTime ?? '08:00', startAuto: !!d.startAuto, stops, note: d.note ?? '' }
 }
 
-/** 旧模型里 startAuto 天的首节点是前一天终点的克隆，去掉与接续起点重复的节点 */
-function migrateTrip(t: any): Trip {
-  const days: Day[] = (t?.days ?? []).map(migrateDay)
-  for (let i = 1; i < days.length; i++) {
-    if (!days[i].startAuto) continue
-    const prevLast = days[i - 1].stops[days[i - 1].stops.length - 1]
-    const first = days[i].stops[0]
-    if (prevLast && first && Math.abs(prevLast.lng - first.lng) < 5e-4 && Math.abs(prevLast.lat - first.lat) < 5e-4) {
-      days[i].stops.splice(0, 1)
+function mkContinuedStop(prevLast: Stop): Stop {
+  return {
+    id: uid('stop'),
+    kind: prevLast.kind,
+    name: prevLast.name,
+    lng: prevLast.lng,
+    lat: prevLast.lat,
+    address: prevLast.address,
+    stayMinutes: 0,
+    note: '',
+    fromPrev: true,
+  }
+}
+
+/** 确保所有启用接续出发的次日，真实拥有并同步前一天最后的节点作为出发节点 */
+function syncContinuationStops(t: Trip | null): boolean {
+  if (!t || !t.days || t.days.length <= 1) return false
+  let changed = false
+  for (let i = 1; i < t.days.length; i++) {
+    const curr = t.days[i]
+    const prev = t.days[i - 1]
+    const prevLast = prev.stops.length > 0 ? prev.stops[prev.stops.length - 1] : null
+
+    if (curr.startAuto) {
+      if (prevLast) {
+        const first = curr.stops[0]
+        if (!first) {
+          curr.stops.push(mkContinuedStop(prevLast))
+          changed = true
+        } else if (first.fromPrev) {
+          if (
+            first.name !== prevLast.name ||
+            first.lng !== prevLast.lng ||
+            first.lat !== prevLast.lat ||
+            first.address !== prevLast.address ||
+            first.kind !== prevLast.kind
+          ) {
+            first.name = prevLast.name
+            first.lng = prevLast.lng
+            first.lat = prevLast.lat
+            first.address = prevLast.address
+            first.kind = prevLast.kind
+            changed = true
+          }
+        } else {
+          const isSameLoc =
+            Math.abs(prevLast.lng - first.lng) < 5e-4 && Math.abs(prevLast.lat - first.lat) < 5e-4
+          if (isSameLoc) {
+            first.fromPrev = true
+          } else {
+            curr.stops.unshift(mkContinuedStop(prevLast))
+            changed = true
+          }
+        }
+      } else {
+        if (curr.stops[0]?.fromPrev) {
+          curr.stops.shift()
+          changed = true
+        }
+      }
+    } else {
+      if (curr.stops[0]?.fromPrev) {
+        curr.stops.shift()
+        changed = true
+      }
     }
   }
-  return { ...t, id: t?.id ?? uid('trip'), days }
+  return changed
+}
+
+/** 迁移路书数据，并确保多天接续出发节点实体化同步 */
+function migrateTrip(t: any): Trip {
+  const days: Day[] = (t?.days ?? []).map(migrateDay)
+  const res: Trip = { ...t, id: t?.id ?? uid('trip'), days }
+  syncContinuationStops(res)
+  return res
 }
 
 export const useTripStore = defineStore('trip', () => {
@@ -265,15 +329,9 @@ export const useTripStore = defineStore('trip', () => {
 
   /**
    * 当天参与绘图/接续的点序列。
-   * 次日（startAuto）默认从前一天最后一个地点出发，因此会把 prevLast 拼在最前面。
+   * 次日（startAuto）默认在 stops[0] 保存前一天最后节点作为真实实体节点。
    */
   function routePoints(day: Day): Stop[] {
-    const i = dayIndex(day.id)
-    if (i > 0 && day.startAuto) {
-      const prev = trip.value?.days[i - 1]
-      const prevLast = prev?.stops[prev.stops.length - 1]
-      if (prevLast) return [prevLast, ...day.stops]
-    }
     return day.stops
   }
 
@@ -284,8 +342,7 @@ export const useTripStore = defineStore('trip', () => {
 
   /** 首节点是否来自前一天的终点 */
   function originFromPrev(day: Day): boolean {
-    const seq = routePoints(day)
-    return seq.length > 0 && seq[0] !== day.stops[0]
+    return !!(day.startAuto && day.stops[0]?.fromPrev)
   }
 
   // ───────────────────────── 相邻节点车行距离与线路 ─────────────────────────
@@ -420,6 +477,7 @@ export const useTripStore = defineStore('trip', () => {
     } else {
       while (t.days.length < n) t.days.push(emptyDay())
     }
+    syncContinuationStops(t)
     if (!t.days.some((d) => d.id === view.value)) view.value = t.days[0]?.id ?? 'overview'
     t.days.forEach((d) => touchLegs(d.id))
     saveNow()
@@ -437,6 +495,7 @@ export const useTripStore = defineStore('trip', () => {
     if (i < 0) return
     if (!window.confirm(`删除第${cnOrdinal(i + 1)}天及其全部地点？`)) return
     t.days.splice(i, 1)
+    syncContinuationStops(t)
     if (view.value === dayId) view.value = t.days[Math.min(i, t.days.length - 1)].id
     t.days.forEach((d) => touchLegs(d.id))
     saveNow()
@@ -449,7 +508,9 @@ export const useTripStore = defineStore('trip', () => {
     const s = mkStop(poi, kind)
     s.stayMinutes = defaultStay(kind)
     day.stops.push(s)
+    if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
     save()
     return true
   }
@@ -459,7 +520,13 @@ export const useTripStore = defineStore('trip', () => {
     if (!day) return
     const idx = day.stops.findIndex((s) => s.id === stopId)
     if (idx < 0) return
+    const isContinuationNode = idx === 0 && day.stops[0].fromPrev
     day.stops.splice(idx, 1)
+    if (isContinuationNode) {
+      // 用户主动删除了复制过来的接续出发节点，切换为从本日第一地出发
+      day.startAuto = false
+    }
+    if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
     touchLegs(nextDayId(dayId))
     save()
@@ -471,13 +538,17 @@ export const useTripStore = defineStore('trip', () => {
     if (from < 0 || to < 0 || from >= day.stops.length || to >= day.stops.length || from === to) return
     const [s] = day.stops.splice(from, 1)
     day.stops.splice(to, 0, s)
+    if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
     save()
   }
 
   /** 拖拽排序：vuedraggable 已直接修改数组，这里只负责刷新距离与保存 */
   function reorderStops(dayId: string) {
+    if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
     save()
   }
 
@@ -490,6 +561,8 @@ export const useTripStore = defineStore('trip', () => {
     s.lng = poi.lng
     s.lat = poi.lat
     s.address = poi.address || poi.district || ''
+    if (s.fromPrev) s.fromPrev = false
+    if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
     touchLegs(nextDayId(dayId))
     save()
@@ -502,6 +575,9 @@ export const useTripStore = defineStore('trip', () => {
     const trimmed = name.trim()
     if (s && trimmed) {
       s.name = trimmed
+      if (s.fromPrev) s.fromPrev = false
+      if (trip.value) syncContinuationStops(trip.value)
+      touchLegs(nextDayId(dayId))
       save()
     }
   }
@@ -521,6 +597,8 @@ export const useTripStore = defineStore('trip', () => {
     if (!s) return
     s.kind = kind
     if (s.stayMinutes === 0 && defaultStay(kind) > 0) s.stayMinutes = defaultStay(kind)
+    if (s.fromPrev) s.fromPrev = false
+    if (trip.value) syncContinuationStops(trip.value)
     save()
   }
 
@@ -528,8 +606,9 @@ export const useTripStore = defineStore('trip', () => {
   function toggleStartAuto(dayId: string) {
     const day = findDay(dayId)
     const i = dayIndex(dayId)
-    if (!day || i <= 0) return
+    if (!day || i <= 0 || !trip.value) return
     day.startAuto = !day.startAuto
+    syncContinuationStops(trip.value)
     touchLegs(dayId)
     save()
   }
@@ -543,7 +622,10 @@ export const useTripStore = defineStore('trip', () => {
         s.lng = poi.lng
         s.lat = poi.lat
         s.address = poi.address || poi.district || ''
+        if (s.fromPrev) s.fromPrev = false
+        if (trip.value) syncContinuationStops(trip.value)
         touchLegs(target.dayId)
+        touchLegs(nextDayId(target.dayId))
         save()
       }
     } else {

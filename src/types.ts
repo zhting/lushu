@@ -10,6 +10,7 @@ export interface Stop {
   address: string
   stayMinutes: number
   note?: string
+  fromPrev?: boolean // 是否为从前一天终点复制过来的接续出发节点
 }
 
 export interface Day {

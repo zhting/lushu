@@ -188,7 +188,15 @@ function globalMarks(trip: Trip): Mark[] {
   const all: { s: Stop; color: string }[] = []
   trip.days.forEach((day, di) => {
     const color = DAY_COLORS[di % DAY_COLORS.length]
-    for (const s of day.stops) all.push({ s, color })
+    for (const s of day.stops) {
+      if (s.fromPrev && all.length > 0) {
+        const last = all[all.length - 1].s
+        if (Math.abs(last.lng - s.lng) < 5e-4 && Math.abs(last.lat - s.lat) < 5e-4) {
+          continue
+        }
+      }
+      all.push({ s, color })
+    }
   })
   const total = all.length
   return all.map((m, i) => ({
