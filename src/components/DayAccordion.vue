@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { nextTick, ref, watch } from 'vue'
 import { useTripStore } from '../stores/trip'
 import { cityOfAddress, cnOrdinal, dateOfDay, fmtDate } from '../services/geo'
 import Draggable from 'vuedraggable'
@@ -19,9 +19,50 @@ function routeLabel(i: number): string {
   return `${a} → ${b}`
 }
 
-function toggleDay(id: string) {
-  store.view = store.view === id ? '' : id
+/** 智能平滑向上滚动：将目标天数卡片头部平滑滚动对齐到面板顶部，给下方内容留出充足操作空间 */
+async function scrollToDay(dayId: string) {
+  if (!dayId) return
+  await nextTick()
+
+  const performScroll = () => {
+    const panel = document.querySelector('.trip-side-panel') as HTMLElement | null
+    const card = (document.querySelector(`[data-day-id="${dayId}"]`) ||
+      document.getElementById(`day-card-${dayId}`)) as HTMLElement | null
+    if (!panel || !card) return
+
+    let targetTop = 0
+    if (card.offsetParent === panel) {
+      targetTop = card.offsetTop - 10
+    } else {
+      const panelRect = panel.getBoundingClientRect()
+      const cardRect = card.getBoundingClientRect()
+      targetTop = panel.scrollTop + (cardRect.top - panelRect.top) - 10
+    }
+
+    panel.scrollTo({
+      top: Math.max(0, targetTop),
+      behavior: 'smooth',
+    })
+  }
+
+  performScroll()
+  setTimeout(performScroll, 80)
+  setTimeout(performScroll, 220)
 }
+
+function toggleDay(id: string) {
+  const willOpen = store.view !== id
+  store.view = willOpen ? id : ''
+}
+
+watch(
+  () => store.view,
+  (newVal) => {
+    if (newVal && newVal !== 'overview') {
+      scrollToDay(newVal)
+    }
+  },
+)
 
 function toggleDayMenu(dayId: string, e: MouseEvent) {
   e.stopPropagation()
@@ -31,6 +72,11 @@ function toggleDayMenu(dayId: string, e: MouseEvent) {
 function handleAddDay() {
   if (!store.trip) return
   store.setDayCount(store.trip.days.length + 1)
+  const newest = store.trip.days[store.trip.days.length - 1]
+  if (newest) {
+    store.view = newest.id
+    scrollToDay(newest.id)
+  }
 }
 </script>
 
@@ -48,6 +94,8 @@ function handleAddDay() {
     >
       <template #item="{ element: d, index: i }">
         <section
+          :id="'day-card-' + d.id"
+          :data-day-id="d.id"
           class="day-card"
           :class="{ 'day-card-open': store.view === d.id }"
         >

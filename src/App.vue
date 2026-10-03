@@ -14,6 +14,10 @@ const store = useTripStore()
 const auth = useAuthStore()
 const showTripMoreMenu = ref(false)
 
+if (typeof window !== 'undefined') {
+  ;(window as any).__trip_store__ = store
+}
+
 onMounted(() => auth.init())
 
 // 登录后加载服务端配置与路书；退出时清空会话数据
