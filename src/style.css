@@ -1642,18 +1642,40 @@ button {
   top: calc(100% + 4px);
   left: 0;
   z-index: 20;
-  width: 160px;
+  width: 200px;
   padding: 8px;
-  background: #fff;
+  background: #ffffff;
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow-popover);
 }
 
+.city-search-wrap {
+  position: relative;
+  margin-bottom: 6px;
+}
+
 .city-search {
   width: 100% !important;
-  padding: 5px 8px;
-  margin-bottom: 6px;
+  padding: 6px 26px 6px 8px;
+  font-size: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  outline: none;
+}
+
+.city-search:focus {
+  border-color: var(--brand);
+}
+
+.city-search-spinner {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 12px;
+  color: #f59e0b;
+  animation: pulse 1s infinite alternate;
 }
 
 .city-list {
@@ -1678,6 +1700,26 @@ button {
 .city-list li.active {
   color: var(--brand);
   font-weight: 700;
+  background: #eff6ff;
+}
+
+.city-item-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+.city-name {
+  font-weight: 500;
+}
+
+.city-sub {
+  font-size: 11px;
+  color: var(--muted);
+  background: #f1f5f9;
+  padding: 1px 5px;
+  border-radius: 4px;
 }
 
 .picker-input {

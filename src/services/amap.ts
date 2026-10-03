@@ -22,7 +22,7 @@ export function loadAMap(key: string, securityJsCode = ''): Promise<any> {
     const script = document.createElement('script')
     script.src =
       `https://webapi.amap.com/maps?v=2.0&key=${encodeURIComponent(key)}` +
-      `&plugin=AMap.Driving,AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation`
+      `&plugin=AMap.Driving,AMap.PlaceSearch,AMap.Geocoder,AMap.Geolocation,AMap.DistrictSearch,AMap.AutoComplete`
     script.async = true
     script.onerror = () => {
       loadPromise = null
@@ -156,3 +156,100 @@ export async function legRoute(
     })
   })
 }
+
+export interface CityItem {
+  name: string
+  province?: string
+  adcode?: string
+}
+
+/** 城市/行政区搜索（调用高德 AMap.DistrictSearch 与 AMap.AutoComplete） */
+export async function searchCities(kw: string): Promise<CityItem[]> {
+  const AMap = getAMap()
+  const keyword = kw.trim()
+  if (!keyword || !AMap) return []
+
+  const results: CityItem[] = []
+  const seen = new Set<string>()
+
+  // 1. 优先尝试 AMap.DistrictSearch（行政区划检索）
+  try {
+    const list = await new Promise<any[]>((resolve) => {
+      AMap.plugin(['AMap.DistrictSearch'], () => {
+        const ds = new AMap.DistrictSearch({
+          subdistrict: 0,
+          extensions: 'base',
+        })
+        ds.search(keyword, (status: string, result: any) => {
+          if (status === 'complete' && result?.districtList) {
+            resolve(result.districtList)
+          } else {
+            resolve([])
+          }
+        })
+      })
+    })
+
+    for (const d of list) {
+      const level = d.level
+      // 仅保留省、地级市、区县级行政区，彻底排除街道、居委会等
+      if (level && !['province', 'city', 'district'].includes(level)) continue
+
+      const rawName = String(d.name || '').trim()
+      if (!rawName || /街道|社区|村|路|大厦|小区$/.test(rawName)) continue
+
+      const shortName = rawName.replace(/(?:市|特别行政区|壮族自治区|维吾尔自治区|回族自治区|自治区)$/, '')
+      const key = shortName || rawName
+      if (key && !seen.has(key)) {
+        seen.add(key)
+        results.push({
+          name: key,
+          adcode: d.adcode,
+        })
+      }
+    }
+  } catch {
+    // 忽略异常
+  }
+
+  // 2. 补充 AutoComplete 地名输入提示（严格仅保留行政区，过滤掉街道与社区）
+  if (results.length < 5) {
+    try {
+      const tips = await new Promise<any[]>((resolve) => {
+        AMap.plugin(['AMap.AutoComplete'], () => {
+          const ac = new AMap.AutoComplete({
+            type: '190100|190101|190102|190103|190104|190105',
+          })
+          ac.search(keyword, (status: string, result: any) => {
+            if (status === 'complete' && result?.tips) {
+              resolve(result.tips)
+            } else {
+              resolve([])
+            }
+          })
+        })
+      })
+
+      for (const t of tips) {
+        const rawName = String(t.name || '').trim()
+        if (!rawName || /街道|社区|村|路|大厦|小区|胡同|巷|店|广场|站$/.test(rawName)) continue
+        const shortName = rawName.replace(/(?:市|特别行政区)$/, '')
+        const key = shortName || rawName
+        if (key && !seen.has(key)) {
+          seen.add(key)
+          const prov = String(t.district || '').split(/[省市区县]/)[0]
+          results.push({
+            name: key,
+            province: prov || undefined,
+            adcode: t.adcode,
+          })
+        }
+      }
+    } catch {
+      // 容错
+    }
+  }
+
+  return results
+}
+

@@ -41,3 +41,9 @@ export function legRoute(
 ): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
   return provider === 'amap' ? amapSvc.legRoute(a, b, key, securityJsCode) : osmSvc.legRoute(a, b)
 }
+
+/** 城市/行政区搜索接口 */
+export function searchCities(kw: string): Promise<Array<{ name: string; province?: string }>> {
+  return provider === 'amap' ? amapSvc.searchCities(kw) : Promise.resolve([])
+}
+

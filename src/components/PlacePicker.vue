@@ -22,7 +22,7 @@ onMounted(() => {
   const s = day?.stops.find((x) => x.id === t.stopId)
   if (!s) return
   const city = cityOfAddress(s.address || '').replace(/市$/, '')
-  if (city && COMMON_CITIES.includes(city)) store.pickerCity = city
+  if (city) store.pickerCity = city
   if (s.name) {
     kw.value = s.name
     void search(s.name)
