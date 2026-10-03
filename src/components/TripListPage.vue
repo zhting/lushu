@@ -46,6 +46,29 @@ function closeAllMenus() {
   showUserMenu.value = false
   activeMenuTripId.value = null
 }
+
+interface CoverTheme {
+  src: string
+  line1: string
+  line2: string
+}
+
+const COVER_THEMES: CoverTheme[] = [
+  { src: '/images/covers/cover_grassland.jpg', line1: '山河辽阔', line2: '—— 总有下一站' },
+  { src: '/images/covers/cover_sunset.jpg', line1: '追光而行', line2: '—— 奔赴山海与晚霞' },
+  { src: '/images/covers/cover_autumn.jpg', line1: '岁月如诗', line2: '—— 穿行在金黄秋日' },
+  { src: '/images/covers/cover_mountain.jpg', line1: '向远方去', line2: '—— 见天地也见自己' },
+  { src: '/images/covers/cover_lake.jpg', line1: '清风微澜', line2: '—— 漫游碧水青山间' },
+]
+
+function getTripTheme(id: string): CoverTheme {
+  if (!id) return COVER_THEMES[0]
+  let hash = 0
+  for (let i = 0; i < id.length; i++) {
+    hash = (hash * 31 + id.charCodeAt(i)) >>> 0
+  }
+  return COVER_THEMES[hash % COVER_THEMES.length]
+}
 </script>
 
 <template>
@@ -53,8 +76,8 @@ function closeAllMenus() {
     <div class="home-container">
       <!-- 整个覆盖顶部的 Hero 区域（背景图通顶，Header 浮于其上） -->
       <section class="top-hero-full-wrap">
-        <!-- 背景图片：覆盖整个顶部 Header 到创建按钮区域 -->
-        <img src="/images/hero_banner.jpg" alt="自驾公路风景" class="hero-full-bg-img" />
+        <!-- 背景图片：首页专属晴空自驾海鸥封面（图2风格） -->
+        <img src="/images/home_hero.jpg" alt="自驾公路风景" class="hero-full-bg-img" />
         <!-- 顶部柔光蒙层，保证 Logo 与导航文字清晰明亮 -->
         <div class="hero-top-soft-mask"></div>
 
@@ -164,11 +187,11 @@ function closeAllMenus() {
           >
             <!-- 封面图部分 -->
             <div class="card-cover-wrap">
-              <img src="/images/trip_cover.jpg" alt="路书封面" class="card-cover-img" />
-              <!-- 手绘文艺字：山河辽阔 / —— 总有下一站 -->
+              <img :src="getTripTheme(s.id).src" :alt="s.title" class="card-cover-img" />
+              <!-- 手绘文艺字：根据封面主题自适应文案 -->
               <div class="card-cover-badge">
-                <div class="badge-line1">山河辽阔</div>
-                <div class="badge-line2">—— 总有下一站</div>
+                <div class="badge-line1">{{ getTripTheme(s.id).line1 }}</div>
+                <div class="badge-line2">{{ getTripTheme(s.id).line2 }}</div>
               </div>
               <button
                 class="card-more-btn"

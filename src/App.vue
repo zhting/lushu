@@ -81,7 +81,7 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
       <div class="trip-page-layout">
         <!-- 沉浸式顶部风景 Header -->
         <header class="immersive-trip-header">
-          <img src="/images/hero_banner.jpg" alt="行程背景" class="header-bg-image" />
+          <img src="/images/trip_hero.jpg" alt="行程背景" class="header-bg-image" />
           <div class="header-gradient-mask"></div>
 
           <!-- 顶部快捷操作栏（中间留空透出湖山风光） -->

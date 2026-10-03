@@ -244,6 +244,9 @@ button {
    ───────────────────────────────────────────────────────────── */
 .home-page {
   min-height: 100%;
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
   display: flex;
   flex-direction: column;
   background: #f8fafc;
@@ -266,6 +269,7 @@ button {
   position: relative;
   width: 100%;
   height: 390px;
+  flex-shrink: 0;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -273,7 +277,7 @@ button {
   background: #ffffff;
 }
 
-/* 背景风景插画（日系清爽自驾公路，通顶全景 + 上下双向羽化淡入淡出） */
+/* 首页专属背景插画（原版极简纯净晴空：通顶大面积蓝天白云海鸥 + 底部柔和羽化淡入淡出） */
 .hero-full-bg-img {
   position: absolute;
   inset: 0;
@@ -302,9 +306,9 @@ button {
   );
 }
 
-/* 上下双向白雾柔和渐变蒙层：
+/* 上下双向白雾柔和渐变蒙层（图 2 原版效果）：
    1. 顶部自上而下：从几近纯白平滑过渡到天空蓝，让状态栏与 Logo 格外清晰舒适
-   2. 底部自下而上：从创建按钮下方开始羽化变白，自然溶解进入下方的白色列表背景 */
+   2. 底部自下而上：从创建按钮下方开始柔和羽化变白，自然溶解进入下方的白色列表背景 */
 .hero-top-soft-mask {
   position: absolute;
   inset: 0;
@@ -505,7 +509,7 @@ button {
   filter: drop-shadow(0 2px 6px rgba(255, 255, 255, 0.8));
 }
 
-/* 底部悬浮大胶囊按钮条 */
+/* 底部悬浮大胶囊按钮条（图 2 原版立体质感） */
 .hero-btn-bottom-bar {
   position: relative;
   z-index: 10;
