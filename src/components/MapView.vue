@@ -149,62 +149,113 @@ async function onMapClickLeaflet(e: any) {
   }
 }
 
-function markerHtml(color: string, text: string, main: boolean): string {
-  return `<div class="mk ${main ? 'mk-main' : ''}" style="--mk:${color}">${text}</div>`
+interface Mark {
+  s: Stop
+  color: string
+  dayIndex: number
+  dayLabel: string
+  stopIndex: number
+  numText: string
+  name: string
+  isJoint?: boolean
+  jointDesc?: string
 }
 
 function escapeHtml(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]!))
 }
 
-function popupHtml(s: Stop): string {
-  return (
-    `<div class="mk-info"><b>${escapeHtml(s.name)}</b>` +
-    (s.address ? `<br/><span style="color:#68758a">${escapeHtml(s.address)}</span>` : '') +
-    '</div>'
-  )
+/** 生成自驾路书专业地点图钉：数字气泡 + 天数徽标 + 地名胶囊标签 */
+function markerHtml(m: Mark): string {
+  const isJoint = !!m.isJoint
+  const bubbleClass = `marker-bubble ${isJoint ? 'joint-bubble' : ''}`
+  const safeName = escapeHtml(m.name)
+  return `<div class="map-marker-anchor" style="--mk-color:${m.color}">` +
+    `<div class="map-marker-pin" title="${m.dayLabel} 第${m.stopIndex}站：${safeName}">` +
+      `<div class="${bubbleClass}">` +
+        `<span class="marker-day-tag">${m.dayLabel}</span>` +
+        `<span class="marker-num-val">${m.numText}</span>` +
+      `</div>` +
+      `<div class="marker-name-tag">${safeName}</div>` +
+    `</div>` +
+  `</div>`
 }
 
-interface Mark {
-  s: Stop
-  color: string
-  text: string
-  main: boolean
+/** 地点弹窗详细信息卡片 */
+function popupHtml(m: Mark): string {
+  const s = m.s
+  const safeName = escapeHtml(s.name)
+  const safeAddr = s.address ? escapeHtml(s.address) : ''
+  return `<div class="mk-info-card">` +
+    `<div class="mk-info-header">` +
+      `<span class="mk-info-badge" style="background:${m.color}">${m.dayLabel} · 第${m.stopIndex}站</span>` +
+    `</div>` +
+    `<div class="mk-info-title">${safeName}</div>` +
+    (m.jointDesc ? `<div style="font-size:11.5px;color:#2563eb;font-weight:700;margin-top:2px;">🔄 ${escapeHtml(m.jointDesc)}</div>` : '') +
+    (safeAddr ? `<div class="mk-info-addr">📍 ${safeAddr}</div>` : '') +
+    (s.stayMinutes ? `<div class="mk-info-stay">⏱️ 建议停留 ${s.stayMinutes} 分钟</div>` : '') +
+  `</div>`
 }
 
-/** 单日视角：当天 起 → 序号 → 终 */
+/** 单日视角：当天按地点自然序号 1, 2, 3... 顺次标记 */
 function dayMarks(trip: Trip, dayId: string): Mark[] {
   const day = trip.days.find((d) => d.id === dayId)
   if (!day) return []
-  const color = DAY_COLORS[trip.days.indexOf(day) % DAY_COLORS.length]
-  return store.routePointsOf(dayId).map((s, i, seq) => {
-    const isEnd = i === seq.length - 1
-    return { s, color, text: i === 0 ? '起' : isEnd ? '终' : String(i), main: i === 0 || isEnd }
-  })
+  const di = trip.days.indexOf(day)
+  const color = DAY_COLORS[di % DAY_COLORS.length]
+  const stops = store.routePointsOf(dayId)
+
+  return stops.map((s, i) => ({
+    s,
+    color,
+    dayIndex: di,
+    dayLabel: `D${di + 1}`,
+    stopIndex: i + 1,
+    numText: String(i + 1),
+    name: s.name,
+    isJoint: s.fromPrev && i === 0,
+    jointDesc: s.fromPrev && i === 0 ? '从前一天接续出发' : undefined,
+  }))
 }
 
-/** 总览视角：全程统一编号 —— 首点 起，末点 终，中间从 1 顺次（颜色仍按天） */
+/** 总览视角：把每一天地点用数字标在地图路径上（D1: 1, 2..；D2: 1, 2..） */
 function globalMarks(trip: Trip): Mark[] {
-  const all: { s: Stop; color: string }[] = []
+  const marks: Mark[] = []
+
   trip.days.forEach((day, di) => {
     const color = DAY_COLORS[di % DAY_COLORS.length]
-    for (const s of day.stops) {
-      if (s.fromPrev && all.length > 0) {
-        const last = all[all.length - 1].s
-        if (Math.abs(last.lng - s.lng) < 5e-4 && Math.abs(last.lat - s.lat) < 5e-4) {
-          continue
+    day.stops.forEach((s, si) => {
+      // 检查是否为跨天接续出发且与上一天最后一站物理重合
+      if (s.fromPrev && si === 0 && marks.length > 0) {
+        const lastMark = marks[marks.length - 1]
+        const isSame =
+          Math.abs(lastMark.s.lng - s.lng) < 5e-4 && Math.abs(lastMark.s.lat - s.lat) < 5e-4
+        if (isSame) {
+          // 优化为联合交接图钉：展示 D1/D2 及 2/1，合并两日信息而不漏掉第二天的第 1 站
+          lastMark.isJoint = true
+          const daysPart = lastMark.dayLabel.includes('/') || lastMark.dayLabel.includes('~')
+            ? `${lastMark.dayLabel.split(/[/~]/)[0]}~D${di + 1}`
+            : `${lastMark.dayLabel}/D${di + 1}`
+          lastMark.dayLabel = daysPart
+          lastMark.numText = `${lastMark.stopIndex}/${si + 1}`
+          lastMark.jointDesc = `第${lastMark.dayIndex + 1}天终点 ➔ 第${di + 1}天接续出发`
+          return
         }
       }
-      all.push({ s, color })
-    }
+
+      marks.push({
+        s,
+        color,
+        dayIndex: di,
+        dayLabel: `D${di + 1}`,
+        stopIndex: si + 1,
+        numText: String(si + 1),
+        name: s.name,
+      })
+    })
   })
-  const total = all.length
-  return all.map((m, i) => ({
-    s: m.s,
-    color: m.color,
-    text: total === 1 ? '起' : i === 0 ? '起' : i === total - 1 ? '终' : String(i),
-    main: i === 0 || i === total - 1,
-  }))
+
+  return marks
 }
 
 function redraw() {
@@ -249,17 +300,17 @@ function redrawAmap() {
     }
   }
 
-  // 标记：总览 = 全程统一编号（起 → 1..N → 终）；单日 = 当天起终与序号
+  // 标记：总览与单日均按每一天以自然数字准确标注在路径上
   const marks = store.view === 'overview' ? globalMarks(trip) : dayMarks(trip, store.view)
   for (const m of marks) {
     const marker = new AMap.Marker({
       position: [m.s.lng, m.s.lat],
-      content: markerHtml(m.color, m.text, m.main),
-      anchor: 'center',
+      content: markerHtml(m),
+      anchor: 'top-left',
       zIndex: 120,
     })
     marker.on('click', () => {
-      infoWindow.setContent(popupHtml(m.s))
+      infoWindow.setContent(popupHtml(m))
       infoWindow.open(map, [m.s.lng, m.s.lat])
     })
     map.add(marker)
@@ -305,18 +356,17 @@ function redrawLeaflet() {
     }
   }
 
-  // 标记：总览 = 全程统一编号（起 → 1..N → 终）；单日 = 当天起终与序号
+  // 标记：总览与单日均按每一天以自然数字准确标注在路径上
   const marks = store.view === 'overview' ? globalMarks(trip) : dayMarks(trip, store.view)
   for (const m of marks) {
-    const size = m.main ? 30 : 26
     const icon = lib.divIcon({
       className: '',
-      html: markerHtml(m.color, m.text, m.main),
-      iconSize: [size, size],
-      iconAnchor: [size / 2, size / 2],
+      html: markerHtml(m),
+      iconSize: [0, 0],
+      iconAnchor: [0, 0],
     })
-    const marker = lib.marker([m.s.lat, m.s.lng], { icon }).addTo(layerGroup)
-    marker.bindPopup(popupHtml(m.s))
+    const marker = lib.marker([m.s.lat, m.s.lng], { icon, zIndexOffset: 120 }).addTo(layerGroup)
+    marker.bindPopup(popupHtml(m))
     bounds.push([m.s.lat, m.s.lng])
   }
 
