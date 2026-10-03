@@ -87,20 +87,21 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
       v-model="day.stops"
       item-key="id"
       animation="200"
-      handle=".tl-node-number"
+      handle=".tl-node-col, .station-drag-handle"
       class="timeline-list"
+      ghost-class="timeline-row-ghost"
+      drag-class="timeline-row-dragging"
       @end="store.reorderStops(dayId)"
     >
       <template #item="{ element: s, index: j }">
         <div class="timeline-row" :class="{ 'timeline-row-last': j === day.stops.length - 1 }">
           <!-- 左侧节点序号与垂直虚线 -->
-          <div class="tl-node-col">
-            <div class="tl-node-number" title="按住拖拽排序">{{ stationNumber(j) }}</div>
+          <div class="tl-node-col" title="按住拖拽调整顺序">
+            <div class="tl-node-number">{{ stationNumber(j) }}</div>
             <!-- 垂直虚线连接线（即使最后一项也延伸一段与设计图一致） -->
             <div class="tl-vertical-line" :class="{ 'line-short': j === day.stops.length - 1 }"></div>
           </div>
 
-          <!-- 右侧节点主体卡片 -->
           <!-- 右侧节点主体卡片 -->
           <div class="tl-body-col">
             <div class="tl-station-card">
@@ -134,6 +135,13 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
                     <path d="M13.586 3.586a2 2 0 112.828 2.828l-.793.793-2.828-2.828.793-.793zM11.379 5.793L3 14.172V17h2.828l8.38-8.379-2.83-2.828z" />
                   </svg>
                 </button>
+              </div>
+
+              <!-- 拖拽手柄（六点微标） -->
+              <div class="station-drag-handle" title="按住拖拽调整顺序" @click.stop>
+                <svg viewBox="0 0 20 20" class="drag-dots-svg" fill="currentColor">
+                  <path d="M7 4a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm9-12a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0zm0 6a1.5 1.5 0 11-3 0 1.5 1.5 0 013 0z"/>
+                </svg>
               </div>
 
               <!-- 垂直三点操作项 ⋮ -->

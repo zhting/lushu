@@ -1164,7 +1164,7 @@ button {
   object-position: right center;
 }
 
-/* D1 / D2 正圆形胶囊徽章（设计图样式） */
+/* D1 / D2 正圆形胶囊徽章（设计图样式，支持拖拽调整） */
 .day-circle-badge {
   display: inline-flex;
   align-items: center;
@@ -1180,6 +1180,12 @@ button {
   flex: none;
   z-index: 1;
   transition: all 0.15s ease;
+  cursor: grab;
+  user-select: none;
+}
+
+.day-circle-badge:hover {
+  transform: scale(1.08);
 }
 
 .day-circle-badge.day-circle-active {
@@ -1215,6 +1221,42 @@ button {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* 天数卡片右侧拖拽手柄 */
+.day-drag-handle {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #94a3b8;
+  cursor: grab;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+  z-index: 2;
+  margin-right: 4px;
+  opacity: 0.55;
+}
+
+.day-card-header:hover .day-drag-handle {
+  opacity: 1;
+}
+
+.day-drag-handle:hover {
+  color: #2563eb;
+  background: #f1f5f9;
+}
+
+.day-card-ghost {
+  opacity: 0.4;
+  border: 2px dashed #2563eb !important;
+  background: #eff6ff !important;
+}
+
+.day-card-dragging {
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.18);
+  cursor: grabbing !important;
 }
 
 .toggle-arrow {
@@ -1321,6 +1363,11 @@ button {
   flex-direction: column;
   align-items: center;
   flex: none;
+  cursor: grab;
+}
+
+.tl-node-col:active {
+  cursor: grabbing;
 }
 
 /* 序号实心亮蓝圆圈 1, 2 */
@@ -1338,6 +1385,12 @@ button {
   box-shadow: 0 2px 6px rgba(37, 99, 235, 0.32);
   z-index: 2;
   cursor: grab;
+  user-select: none;
+  transition: transform 0.15s ease;
+}
+
+.tl-node-number:hover {
+  transform: scale(1.1);
 }
 
 /* 垂直纯细天蓝色虚线连接线 */
@@ -1441,6 +1494,49 @@ button {
 
 .station-name-wrap:hover .pencil-edit-btn {
   transform: scale(1.18);
+}
+
+.station-drag-handle {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: grab;
+  padding: 3px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  opacity: 0.55;
+}
+
+.tl-station-card:hover .station-drag-handle {
+  opacity: 1;
+}
+
+.station-drag-handle:hover {
+  background: #f1f5f9;
+  color: #2563eb;
+}
+
+.station-drag-handle:active {
+  cursor: grabbing;
+}
+
+.drag-dots-svg {
+  width: 15px;
+  height: 15px;
+}
+
+.timeline-row-ghost {
+  opacity: 0.35;
+  background: #eff6ff !important;
+  border-radius: 12px;
+}
+
+.timeline-row-dragging {
+  opacity: 0.95;
+  cursor: grabbing !important;
 }
 
 .station-actions-wrap {

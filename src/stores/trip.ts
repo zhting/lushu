@@ -544,8 +544,34 @@ export const useTripStore = defineStore('trip', () => {
     save()
   }
 
-  /** 拖拽排序：vuedraggable 已直接修改数组，这里只负责刷新距离与保存 */
+  /** 拖拽排序天数：vuedraggable 已直接修改 trip.days 数组 */
+  function reorderDays() {
+    const t = trip.value
+    if (!t) return
+    // 天数顺序变动后，各天的出发接续关系相应更新
+    syncContinuationStops(t)
+    t.days.forEach((d) => touchLegs(d.id))
+    save()
+  }
+
+  /** 拖拽排序节点：vuedraggable 已直接修改 day.stops 数组，这里负责接续保护与刷新线路 */
   function reorderStops(dayId: string) {
+    const day = findDay(dayId)
+    if (!day) return
+    if (day.stops.length > 0) {
+      if (!day.stops[0].fromPrev) {
+        let hasDetached = false
+        day.stops.forEach((s) => {
+          if (s.fromPrev) {
+            s.fromPrev = false
+            hasDetached = true
+          }
+        })
+        if (hasDetached) {
+          day.startAuto = false
+        }
+      }
+    }
     if (trip.value) syncContinuationStops(trip.value)
     touchLegs(dayId)
     touchLegs(nextDayId(dayId))
@@ -702,7 +728,7 @@ export const useTripStore = defineStore('trip', () => {
     init: loadAll, notify, save, saveNow, reset,
     applyProvider, applyServerConfig, retryLegs,
     createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
-    setTitle, setStartDate, setDayCount, deleteDay,
+    setTitle, setStartDate, setDayCount, deleteDay, reorderDays,
     addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,
     openPicker, openStopEditor, closePicker, pickSearchResult,
     routePointsOf, originFromPrev,
