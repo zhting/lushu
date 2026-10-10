@@ -161,7 +161,7 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
               </button>
               <button
                 class="tab-pill"
-                :class="{ active: store.page === 'overview' }"
+                :class="{ active: store.page === 'overview' && !store.mapOpen }"
                 @click="handleTabClick('overview')"
               >
                 <span class="tab-icon">📊</span>
@@ -178,14 +178,14 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
             </div>
           </div>
 
-          <!-- 核心内容区域：左侧行程面板 + 右侧地图 -->
-          <div class="trip-content-main">
+          <!-- 核心内容区域：左侧行程面板 + 右侧地图（选中「地图」Tab 时隐藏左侧面板展示全宽地图） -->
+          <div class="trip-content-main" :class="{ 'map-full-mode': store.mapOpen }">
             <aside class="trip-side-panel">
               <OverviewPanel v-if="store.page === 'overview'" />
               <DayAccordion v-else />
             </aside>
 
-            <!-- 地图视图（PC端常驻右侧，移动端点击Tab「地图」全屏浮层展示） -->
+            <!-- 地图视图（PC端常驻右侧或切至全宽，移动端点击Tab「地图」全屏浮层展示） -->
             <MapView />
 
             <!-- 全屏选点组件 -->

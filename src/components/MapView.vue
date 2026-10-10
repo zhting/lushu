@@ -39,6 +39,7 @@ let loadedProvider: string | null = null
 // ───────────────────────── 巡游播放状态与对象 ─────────────────────────
 const cruiseActive = ref(false)
 const cruisePlaying = ref(false)
+const cruisePanelExpanded = ref(false) // 默认缩小为右下角播放/暂停按钮，放大后恢复底部完整面板
 const cruiseRange = ref<string>('all') // 'all' 或 dayId
 const cruiseSpeed = ref<number>(1) // 默认 1 倍速 (1x, 2x, 4x, 8x)
 // 视角模式：'leg' 分段取景（每段路单独框住，到站时飞向下一段）/ 'follow' 跟随小车 / 'overview' 完整路线全景
@@ -196,25 +197,25 @@ watch(
   },
 )
 
-// 移动端展开地图浮层：容器从 display:none 变为全屏，需要等布局稳定后重算尺寸并重绘适配视野
+// 切换地图模式或展开选点浮层：容器尺寸变化或从隐藏变为显示时，等布局稳定后重算尺寸并重绘适配视野
 watch(
-  () => store.mapOpen,
-  (open) => {
-    if (!open) {
-      abortRecording('地图已关闭，视频录制已取消')
-      if (cruiseActive.value) stopCruise()
-      return
-    }
+  () => [store.mapOpen, store.pickerOpen],
+  () => {
     void nextTick(() => {
+      if (!containerVisible()) {
+        abortRecording('地图已关闭，视频录制已取消')
+        if (cruiseActive.value) stopCruise()
+        return
+      }
       if (!map) {
         tryInit()
         return
       }
       requestAnimationFrame(() => {
         if (loadedProvider === 'osm') map.invalidateSize()
-        redraw()
+        if (!cruiseActive.value) redraw()
         setTimeout(() => {
-          if (loadedProvider === 'osm' && store.mapOpen) map.invalidateSize()
+          if (loadedProvider === 'osm' && containerVisible()) map.invalidateSize()
         }, 150)
       })
     })
@@ -750,6 +751,7 @@ function startCruise() {
     store.notify('请先打开或创建一份路书', 'error')
     return
   }
+  cruisePanelExpanded.value = false
   cruiseRange.value = store.view && store.view !== 'overview' ? store.view : 'all'
   if (prepareCruise(cruiseRange.value)) playFrom(0)
 }
@@ -994,7 +996,7 @@ function camPadding(withTitleCard = false) {
   const h = el.value?.clientHeight || 600
   let bottom = Math.min(70, h * 0.1)
   const panel = el.value?.closest('.mapwrap')?.querySelector('.cruise-panel-float') as HTMLElement | null
-  if (panel && el.value && !isRecording.value) {
+  if (panel && el.value && !isRecording.value && cruisePanelExpanded.value) {
     const mapRect = el.value.getBoundingClientRect()
     const panelRect = panel.getBoundingClientRect()
     bottom = Math.max(bottom, mapRect.bottom - panelRect.top + 24)
@@ -1569,9 +1571,37 @@ function cancelRecording() {
       </div>
     </div>
 
-    <!-- 巡游播放控制器浮层：普通巡游时显示，16:9 录制时纯净隐藏，不录入任何窗口内容 -->
-    <div v-if="cruiseActive && !isRecording" class="cruise-panel-float">
-      <div class="cruise-panel-card">
+    <!-- 巡游播放控制器浮层：默认缩小在右下角，放大后恢复底部居中完整窗口；16:9 录制时纯净隐藏 -->
+    <div
+      v-if="cruiseActive && !isRecording"
+      class="cruise-panel-float"
+      :class="{ 'is-mini': !cruisePanelExpanded }"
+    >
+      <!-- 默认缩小状态：右下角播放/暂停切换按钮 + 放大恢复按钮 -->
+      <div v-if="!cruisePanelExpanded" class="cruise-mini-dock">
+        <button
+          class="cruise-action-btn cruise-play-btn cruise-mini-play"
+          :title="cruisePlaying ? '暂停播放' : '继续播放'"
+          @click="togglePlay"
+        >
+          {{ cruisePlaying ? '⏸' : '▶' }}
+        </button>
+        <button
+          class="cruise-action-btn cruise-mini-expand"
+          title="放大展开巡游控制面板"
+          @click="cruisePanelExpanded = true"
+        >
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="15 3 21 3 21 9" />
+            <polyline points="9 21 3 21 3 15" />
+            <line x1="21" y1="3" x2="14" y2="10" />
+            <line x1="3" y1="21" x2="10" y2="14" />
+          </svg>
+        </button>
+      </div>
+
+      <!-- 放大后恢复底部居中完整控制面板 -->
+      <div v-else class="cruise-panel-card">
         <!-- 顶部信息栏：经过城市与地点高亮 -->
         <div class="cruise-roof-headline">
           <div class="cruise-headline-left">
@@ -1677,23 +1707,39 @@ function cancelRecording() {
             </option>
           </select>
 
-          <!-- 导出视频按钮 -->
-          <button
-            class="cruise-action-btn cruise-export-btn"
-            title="配置并导出 16:9 巡游视频"
-            @click="openExportModal"
-          >
-            🎬
-          </button>
+          <div class="cruise-ctrl-btns">
+            <!-- 导出视频按钮 -->
+            <button
+              class="cruise-action-btn cruise-export-btn"
+              title="配置并导出 16:9 巡游视频"
+              @click="openExportModal"
+            >
+              🎬
+            </button>
 
-          <!-- 关闭退出 -->
-          <button
-            class="cruise-action-btn cruise-close-btn"
-            title="退出巡游播放"
-            @click="stopCruise"
-          >
-            ✕
-          </button>
+            <!-- 缩小至右下角 -->
+            <button
+              class="cruise-action-btn cruise-collapse-btn"
+              title="缩小至右下角"
+              @click="cruisePanelExpanded = false"
+            >
+              <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="4 14 10 14 10 20" />
+                <polyline points="20 10 14 10 14 4" />
+                <line x1="14" y1="10" x2="21" y2="3" />
+                <line x1="3" y1="21" x2="10" y2="14" />
+              </svg>
+            </button>
+
+            <!-- 关闭退出 -->
+            <button
+              class="cruise-action-btn cruise-close-btn"
+              title="退出巡游播放"
+              @click="stopCruise"
+            >
+              ✕
+            </button>
+          </div>
         </div>
       </div>
     </div>

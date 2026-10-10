@@ -257,6 +257,8 @@ export const useTripStore = defineStore('trip', () => {
     if (!entry) return
     trip.value = migrateTrip(entry.trip)
     currentId.value = id
+    mapOpen.value = false
+    mapReturnView.value = null
     view.value = trip.value?.days[0]?.id ?? 'overview'
     page.value = 'trip'
     trip.value?.days.forEach((d) => touchLegs(d.id)) // 会话内重算各段距离（坐标对缓存命中则零请求）
@@ -265,24 +267,34 @@ export const useTripStore = defineStore('trip', () => {
 
   function goHome() {
     saveNow()
+    mapOpen.value = false
     page.value = 'home'
   }
 
   /** 顶栏「总览」：进入独立总览页（地图显示全部天） */
   function goOverview() {
     if (!trip.value) return
+    mapOpen.value = false
+    mapReturnView.value = null
     view.value = 'overview'
     page.value = 'overview'
   }
 
-  /** 从总览页返回日程列表，默认展开第一天 */
+  /** 从总览页或地图页返回日程列表，恢复或默认展开第一天 */
   function goDays() {
     if (!trip.value) return
+    const restoreView = mapReturnView.value
+    mapOpen.value = false
+    mapReturnView.value = null
     page.value = 'trip'
-    view.value = trip.value.days[0]?.id ?? 'overview'
+    if (restoreView && trip.value.days.some((d) => d.id === restoreView)) {
+      view.value = restoreView
+    } else if (!view.value || view.value === 'overview' || !trip.value.days.some((d) => d.id === view.value)) {
+      view.value = trip.value.days[0]?.id ?? 'overview'
+    }
   }
 
-  /** 顶栏「地图」：全屏查看整个路书（全部天）的路线，关闭后恢复之前展开的天 */
+  /** 顶栏「地图」：查看整个路书（全部天）的纯地图视图，关闭或切换 Tab 后恢复之前展开的天 */
   const mapReturnView = ref<string | null>(null)
 
   function openMapOverview() {
@@ -674,7 +686,6 @@ export const useTripStore = defineStore('trip', () => {
     pickTarget.value = { dayId }
     pickerResults.value = []
     pickerOpen.value = true
-    mapOpen.value = true // 移动端同时展开地图；桌面端此值无副作用
   }
 
   /** 修改节点：全屏选点页上同时编辑名称/类型/停留，并在地图上选新位置替换 */
@@ -682,14 +693,12 @@ export const useTripStore = defineStore('trip', () => {
     pickTarget.value = { dayId, stopId }
     pickerResults.value = []
     pickerOpen.value = true
-    mapOpen.value = true
   }
 
   function closePicker() {
     pickerOpen.value = false
     pickerResults.value = []
     pickTarget.value = null
-    mapOpen.value = false
   }
 
   /** 点击地图上的搜索结果标记（或结果列表项）：新增节点或替换节点位置 */

@@ -17,6 +17,7 @@ function onDateChange(e: Event) {
 
 /** 每日概览行：跳回日程页并展开对应天 */
 function openDay(dayId: string) {
+  store.mapOpen = false
   store.view = dayId
   store.page = 'trip'
 }
