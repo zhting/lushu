@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
 import { useTripStore } from '../stores/trip'
-import { cnOrdinal, dateOfDay, fmtDate } from '../services/geo'
+import { cnOrdinal, dateOfDay, fmtDate, fmtDistance, fmtDuration } from '../services/geo'
+import { fmtYuan } from '../services/schedule'
+import { DAY_COLORS, DRIVE_WARN_MINUTES, ENERGY_META } from '../constants'
+import type { EnergyType } from '../types'
 
 const store = useTripStore()
 const fileInput = ref<HTMLInputElement | null>(null)
@@ -45,6 +48,46 @@ function onFile(e: Event) {
 function removeCurrent() {
   store.deleteCurrentTrip()
 }
+
+// ── 全程合计与每日对比 ──
+const totals = computed(() => store.tripTotals)
+const energyMeta = computed(() => ENERGY_META[store.vehicle.energy])
+const tollsUnsupported = computed(() => store.mapCfg.provider !== 'amap')
+const totalCost = computed(() => totals.value.energy + (totals.value.tolls ?? 0))
+
+/** 每日对比条：按当天车行里程，与最长一天比例；未算出的天显示占位 */
+const dayBars = computed(() => {
+  const days = store.trip?.days ?? []
+  const rows = days.map((d, i) => {
+    const sc = store.schedules[d.id]
+    const cost = store.dayCost(d.id)
+    return {
+      id: d.id,
+      index: i,
+      color: DAY_COLORS[i % DAY_COLORS.length],
+      distanceM: sc?.distanceM ?? null,
+      driveS: sc?.driveS ?? null,
+      cost: cost.energy == null ? null : cost.energy + (cost.tolls ?? 0),
+      empty: d.stops.length < 2,
+      failed: !!store.legFailed[d.id],
+      warn: (sc?.driveS ?? 0) / 60 > DRIVE_WARN_MINUTES,
+    }
+  })
+  const max = Math.max(1, ...rows.map((r) => r.distanceM ?? 0))
+  return rows.map((r) => ({ ...r, pct: r.distanceM ? Math.max(2, (r.distanceM / max) * 100) : 0 }))
+})
+
+function onEnergy(e: EnergyType) {
+  store.setVehicle({ energy: e })
+}
+
+function onConsumption(e: Event) {
+  store.setVehicle({ consumption: Number((e.target as HTMLInputElement).value) })
+}
+
+function onPrice(e: Event) {
+  store.setVehicle({ price: Number((e.target as HTMLInputElement).value) })
+}
 </script>
 
 <template>
@@ -79,6 +122,36 @@ function removeCurrent() {
       </div>
 
       <div class="card">
+        <h3>车辆与费用</h3>
+        <div class="field">
+          <label>能源类型</label>
+          <div class="chip-group">
+            <button
+              v-for="e in (['fuel', 'ev'] as const)"
+              :key="e"
+              type="button"
+              class="chip"
+              :class="{ 'chip-active': store.vehicle.energy === e }"
+              @click="onEnergy(e)"
+            >
+              {{ e === 'fuel' ? '⛽' : '🔌' }} {{ ENERGY_META[e].label }}
+            </button>
+          </div>
+        </div>
+        <div class="row2">
+          <div class="field">
+            <label>{{ store.vehicle.energy === 'fuel' ? '油耗' : '电耗' }}（{{ energyMeta.consumptionUnit }}）</label>
+            <input type="number" min="0" max="100" step="0.1" :value="store.vehicle.consumption" @change="onConsumption" />
+          </div>
+          <div class="field">
+            <label>{{ store.vehicle.energy === 'fuel' ? '油价' : '电价' }}（{{ energyMeta.priceUnit }}）</label>
+            <input type="number" min="0" max="100" step="0.01" :value="store.vehicle.price" @change="onPrice" />
+          </div>
+        </div>
+        <p class="muted" style="margin: 0">{{ energyMeta.costLabel }}按车行里程估算。过路费仅高德地图提供，开源地图下不计。</p>
+      </div>
+
+      <div class="card">
         <h3>数据</h3>
         <div class="ops-row">
           <button class="btn btn-mini" @click="exportJson">导出 JSON</button>
@@ -86,9 +159,73 @@ function removeCurrent() {
           <button class="btn btn-mini" style="color: var(--danger)" @click="removeCurrent">删除当前路书</button>
         </div>
         <input ref="fileInput" type="file" accept="application/json,.json" style="display: none" @change="onFile" />
-        <p class="muted" style="margin: 8px 0 0">数据自动保存在本机浏览器；导入的文件会作为新路程加入首页列表。</p>
+        <p class="muted" style="margin: 8px 0 0">数据自动保存到服务端；导入的文件会作为新路程加入首页列表。</p>
       </div>
     </template>
+
+    <div class="card">
+      <h3>全程合计</h3>
+      <div class="stat-tiles">
+        <div class="stat-tile">
+          <div class="stat-label">总里程</div>
+          <div class="stat-value">{{ totals.distanceM ? fmtDistance(totals.distanceM) : '—' }}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">驾驶时长</div>
+          <div class="stat-value">{{ fmtDuration(totals.driveS) || '—' }}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">{{ energyMeta.costLabel }}（估）</div>
+          <div class="stat-value">{{ totals.distanceM ? fmtYuan(totals.energy) : '—' }}</div>
+        </div>
+        <div class="stat-tile">
+          <div class="stat-label">过路费</div>
+          <div class="stat-value" :class="{ 'stat-na': totals.tolls == null }">
+            {{ totals.tolls != null ? fmtYuan(totals.tolls) : '—' }}
+          </div>
+        </div>
+      </div>
+      <p class="stat-foot muted">
+        <template v-if="totals.distanceM">
+          合计约 <b>{{ fmtYuan(totalCost) }}</b>{{ totals.tolls == null ? '（不含过路费）' : '' }}。
+        </template>
+        {{ energyMeta.costLabel }}按 {{ store.vehicle.consumption }} {{ energyMeta.consumptionUnit }}、{{ store.vehicle.price }} {{ energyMeta.priceUnit }} 估算，可点右上「编辑」修改。
+        <template v-if="tollsUnsupported">过路费需切换到高德地图才能获取。</template>
+        <template v-if="totals.pendingDays">另有 {{ totals.pendingDays }} 天线路还没算出，暂未计入。</template>
+      </p>
+    </div>
+
+    <div class="card">
+      <h3>每日对比</h3>
+      <div class="day-bars" role="table" aria-label="每日车行里程与驾驶时长">
+        <div
+          v-for="r in dayBars"
+          :key="r.id"
+          class="day-bar-row"
+          role="row"
+          :title="r.distanceM != null && !r.empty
+            ? `第${cnOrdinal(r.index + 1)}天：${fmtDistance(r.distanceM)}，驾驶 ${fmtDuration(r.driveS ?? 0)}${r.cost != null ? '，费用约 ' + fmtYuan(r.cost) : ''}`
+            : ''"
+          @click="openDay(r.id)"
+        >
+          <span class="day-bar-label" role="cell">
+            <i class="day-bar-dot" :style="{ background: r.color }"></i>D{{ r.index + 1 }}
+          </span>
+          <span class="day-bar-track" role="cell">
+            <span v-if="r.pct" class="day-bar-fill" :style="{ width: r.pct + '%' }"></span>
+          </span>
+          <span class="day-bar-value" role="cell">
+            <template v-if="r.empty"><span class="muted">未安排</span></template>
+            <template v-else-if="r.distanceM == null"><span class="muted">{{ r.failed ? '未算出' : '计算中' }}</span></template>
+            <template v-else>
+              <b>{{ fmtDistance(r.distanceM) }}</b>
+              <span class="muted"> · {{ fmtDuration(r.driveS ?? 0) || '—' }}</span>
+              <span v-if="r.warn" class="day-bar-warn">⚠️ 超 {{ DRIVE_WARN_MINUTES / 60 }} 小时</span>
+            </template>
+          </span>
+        </div>
+      </div>
+    </div>
 
     <div class="card">
       <h3>每日概览（点击进入单日）</h3>

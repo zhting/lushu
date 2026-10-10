@@ -38,7 +38,7 @@ export function legRoute(
   b: { lng: number; lat: number },
   key = '',
   securityJsCode = '',
-): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
+): Promise<amapSvc.LegResult> {
   return provider === 'amap' ? amapSvc.legRoute(a, b, key, securityJsCode) : osmSvc.legRoute(a, b)
 }
 

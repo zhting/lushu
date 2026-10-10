@@ -21,11 +21,21 @@ export interface Day {
   note: string
 }
 
+export type EnergyType = 'fuel' | 'ev'
+
+/** 车辆能耗设置：用于估算油费 / 电费 */
+export interface Vehicle {
+  energy: EnergyType
+  consumption: number // 燃油 L/100km；纯电 kWh/100km
+  price: number // 燃油 元/L；纯电 元/kWh
+}
+
 export interface Trip {
   id: string
   title: string
   startDate: string // yyyy-mm-dd
   days: Day[]
+  vehicle?: Vehicle // 旧路书没有该字段，读取时回退默认值
 }
 
 /** 本地存储中的一份路书 */
