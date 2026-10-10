@@ -1,0 +1,95 @@
+name: Auto Merge PR
+
+on:
+  pull_request:
+    types:
+      - opened
+      - reopened
+      - synchronize
+      - ready_for_review
+      - edited
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  verify-and-merge-pr:
+    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检出 PR 代码 (Checkout PR)
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: 设置 Node.js 环境
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+          cache: 'npm'
+
+      - name: 安装依赖并验证构建
+        run: |
+          npm install
+          npm run build
+
+      - name: 自动合入 main 主干
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_REF: ${{ github.event.pull_request.base.ref }}
+        run: |
+          set -e
+          # 若前置依赖分支已无开放 PR，自动将目标分支重定向为 main
+          if [ "$BASE_REF" != "main" ]; then
+            OPEN_BASE_PRS=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BASE_REF" --state open --json number --jq 'length')
+            if [ "$OPEN_BASE_PRS" = "0" ]; then
+              echo "==> 前置分支 $BASE_REF 已合入，将 PR #$PR_NUMBER 的 base 切换为 main..."
+              gh pr edit "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --base main
+              sleep 3
+            else
+              echo "==> 前置分支 $BASE_REF 仍有未合并 PR，等待前置 PR 合并后再自动处理。"
+              exit 0
+            fi
+          fi
+
+          echo "==> 正在自动合并 PR #$PR_NUMBER 到 main..."
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --merge --delete-branch || \
+          gh pr merge "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch
+
+  sweep-open-prs:
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 检查并自动合并就绪的开放 PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          PRS=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --json number,isDraft,baseRefName,headRefName,headRepositoryOwner --jq '.[] | select(.isDraft == false) | "\(.number) \(.baseRefName) \(.headRefName)"')
+          if [ -z "$PRS" ]; then
+            echo "==> 当前没有待合并的开放 PR。"
+            exit 0
+          fi
+
+          echo "$PRS" | while read -r NUM BASE HEAD; do
+            [ -z "$NUM" ] && continue
+            if [ "$BASE" != "main" ]; then
+              OPEN_BASE_PRS=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BASE" --state open --json number --jq 'length')
+              if [ "$OPEN_BASE_PRS" = "0" ]; then
+                echo "==> 将链式 PR #$NUM 的 base 从 $BASE 切换为 main..."
+                gh pr edit "$NUM" --repo "$GITHUB_REPOSITORY" --base main
+                sleep 3
+              else
+                continue
+              fi
+            fi
+            echo "==> 尝试自动合并 PR #$NUM ($HEAD -> main)..."
+            gh pr merge "$NUM" --repo "$GITHUB_REPOSITORY" --merge --delete-branch || \
+            gh pr merge "$NUM" --repo "$GITHUB_REPOSITORY" --auto --merge --delete-branch || true
+          done
