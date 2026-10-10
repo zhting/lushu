@@ -1641,6 +1641,11 @@ button {
   height: 100%;
 }
 
+.map-stage {
+  position: absolute;
+  inset: 0;
+}
+
 .map {
   position: absolute;
   inset: 0;
@@ -3041,7 +3046,7 @@ body.is-recording-video .toast {
   left: 50%;
   transform: translateX(-50%);
   z-index: 1400;
-  width: min(640px, calc(100% - 28px));
+  width: min(740px, calc(100% - 28px));
   animation: cruiseSlideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -3377,7 +3382,7 @@ body.is-recording-video .toast {
 
 /* 画框上下各留 64px 黑边：顶部放录制状态条、底部放 toast 提示，两者都不会落进录制画面。
    （浏览器视口通常比 16:9 更宽，若画框占满高度，固定在顶部 / 底部的浮层就会被录进视频） */
-.mapwrap.recording-16-9 .map {
+.mapwrap.recording-16-9 .map-stage {
   position: relative !important;
   width: min(100vw, calc((100vh - 128px) * 16 / 9)) !important;
   height: min(calc(100vh - 128px), calc(100vw * 9 / 16)) !important;
@@ -3389,7 +3394,7 @@ body.is-recording-video .toast {
   cursor: none !important;
 }
 
-.mapwrap.recording-16-9 .map * {
+.mapwrap.recording-16-9 .map-stage * {
   cursor: none !important;
 }
 
@@ -3416,7 +3421,8 @@ body.is-recording-video .toast {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
   border: 1px solid rgba(239, 68, 68, 0.45);
-  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.5), 0 0 16px rgba(239, 68, 68, 0.2);
+  /* 不加外阴影：状态条贴着录制画框上沿，阴影会渗进视频画面 */
+  box-shadow: none;
   color: #ffffff;
   padding: 8px 18px 8px 14px;
   border-radius: var(--radius-pill);
@@ -3821,3 +3827,232 @@ body.is-recording-video .toast {
   transform: translateY(-1px);
 }
 
+
+
+/* ─────────────────────────────────────────────────────────────
+   巡游 HUD 与到站效果（借鉴 map-motion：固定位置的路段说明卡、里程表、开场 / 片尾标题卡）
+   ───────────────────────────────────────────────────────────── */
+.cruise-hud {
+  position: absolute;
+  inset: 0;
+  z-index: 1200;
+  pointer-events: none;
+}
+
+.cruise-hud-caption {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  max-width: min(62%, 460px);
+  background: rgba(15, 23, 42, 0.86);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+  border-radius: 14px;
+  padding: 10px 16px 9px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+}
+
+.cruise-hud-caption-text {
+  font-size: clamp(15px, 2.1vmin, 22px);
+  font-weight: 800;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cruise-hud-caption-sub {
+  margin-top: 3px;
+  font-size: clamp(11px, 1.35vmin, 14px);
+  color: #fdba74;
+  font-weight: 700;
+  letter-spacing: 0.6px;
+  font-variant-numeric: tabular-nums;
+}
+
+.cruise-hud-odo {
+  position: absolute;
+  top: 16px;
+  right: 16px;
+  text-align: right;
+  background: rgba(15, 23, 42, 0.86);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  color: #fff;
+  border-radius: 14px;
+  padding: 8px 16px 9px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  min-width: 120px;
+}
+
+.cruise-hud-odo-label,
+.cruise-hud-odo-total {
+  font-size: clamp(10px, 1.25vmin, 13px);
+  color: #cbd5e1;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+.cruise-hud-odo-value {
+  font-size: clamp(24px, 4.2vmin, 44px);
+  line-height: 1.05;
+  font-weight: 800;
+  font-style: italic;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+  color: #ffffff;
+}
+
+.cruise-hud-odo-value span {
+  font-size: 0.42em;
+  font-style: normal;
+  margin-left: 4px;
+  color: #fdba74;
+  letter-spacing: 0.5px;
+}
+
+.cruise-hud-title {
+  position: absolute;
+  left: 50%;
+  top: 14%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 48px);
+  text-align: center;
+  background: rgba(15, 23, 42, 0.84);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  color: #fff;
+  border-radius: 18px;
+  padding: 14px 28px 13px;
+  box-shadow: 0 16px 40px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+}
+
+.cruise-hud-title.is-outro {
+  top: 16%;
+}
+
+.cruise-hud-title-text {
+  font-size: clamp(22px, 4.6vmin, 48px);
+  font-weight: 900;
+  letter-spacing: 1px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cruise-hud-title-sub {
+  margin-top: 4px;
+  font-size: clamp(12px, 1.8vmin, 18px);
+  color: #fdba74;
+  font-weight: 700;
+  letter-spacing: 0.8px;
+}
+
+/* 卡片进出：上浮淡入 */
+.hud-card-enter-active,
+.hud-card-leave-active,
+.hud-chip-enter-active,
+.hud-chip-leave-active {
+  transition: opacity 0.35s ease, transform 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.hud-card-enter-from,
+.hud-card-leave-to {
+  opacity: 0;
+  transform: translate(-50%, 18px);
+}
+
+.hud-chip-enter-from,
+.hud-chip-leave-to {
+  opacity: 0;
+  transform: translateY(-8px);
+}
+
+.hud-chip-leave-active {
+  position: absolute;
+}
+
+/* 车顶站牌：行驶中收起，到站弹出 */
+.cruise-roof-bubble {
+  transition: opacity 0.25s ease, visibility 0.25s ease;
+}
+
+.cruise-roof-bubble.is-hidden {
+  opacity: 0;
+  visibility: hidden;
+}
+
+.cruise-roof-bubble.pop {
+  animation: roofPop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes roofPop {
+  0% { opacity: 0; transform: translate(-50%, 10px) scale(0.6); }
+  100% { opacity: 1; transform: translate(-50%, 0) scale(1); }
+}
+
+/* 到站涟漪 */
+.cruise-arrive-ring {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  pointer-events: none;
+}
+
+.cruise-arrive-ring::before,
+.cruise-arrive-ring::after {
+  content: '';
+  position: absolute;
+  left: -40px;
+  top: -40px;
+  width: 80px;
+  height: 80px;
+  border-radius: 50%;
+  border: 3px solid #ff5722;
+  opacity: 0;
+}
+
+.cruise-arrive-ring.pop::before {
+  animation: arriveRipple 1.1s ease-out;
+}
+
+.cruise-arrive-ring.pop::after {
+  animation: arriveRipple 1.1s ease-out 0.35s;
+}
+
+@keyframes arriveRipple {
+  0% { opacity: 0.85; transform: scale(0.2); }
+  100% { opacity: 0; transform: scale(1.6); }
+}
+
+.cruise-time-text {
+  margin-left: 8px;
+  font-variant-numeric: tabular-nums;
+  color: #64748b;
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .cruise-hud-caption { top: 10px; left: 10px; padding: 7px 12px; max-width: calc(100% - 150px); }
+  .cruise-hud-odo { top: 10px; right: 10px; padding: 6px 12px; min-width: 96px; }
+  .cruise-time-text { display: none; }
+  /* 手机上顶部按钮栏占满一行，路段卡与里程表都放到它下面 */
+  .mapwrap:not(.recording-16-9) .cruise-hud-caption,
+  .mapwrap:not(.recording-16-9) .cruise-hud-odo { top: 64px; }
+}
+
+/* 非录制时右上角有操作按钮栏，里程表下移让位 */
+.mapwrap:not(.recording-16-9) .cruise-hud-odo {
+  top: 64px;
+}
+
+/* 巡游时隐藏地图缩放按钮：左上角让给路段说明卡，录制画面也更干净 */
+.mapwrap.in-cruise .leaflet-control-zoom {
+  display: none;
+}

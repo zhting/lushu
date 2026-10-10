@@ -1,13 +1,18 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useTripStore } from '../stores/trip'
 import { loadMapLib, reverseGeocode } from '../services/map'
-import { cnOrdinal, fmtDistance } from '../services/geo'
-import { DAY_COLORS } from '../constants'
+import { cnOrdinal, dateOfDay, fmtDate, fmtDistance } from '../services/geo'
+import { DAY_COLORS, KIND_META } from '../constants'
 import type { Stop, Trip } from '../types'
 import {
   buildCruiseTrack,
+  buildCruiseTimeline,
   sampleCruiseTrack,
+  timelineAt,
+  type CruiseMoment,
+  type CruisePoint,
+  type CruiseTimeline,
   type CruiseTrack,
   type CruiseState,
 } from '../services/cruise'
@@ -36,10 +41,15 @@ const cruiseActive = ref(false)
 const cruisePlaying = ref(false)
 const cruiseRange = ref<string>('all') // 'all' 或 dayId
 const cruiseSpeed = ref<number>(1) // 默认 1 倍速 (1x, 2x, 4x, 8x)
-const cruiseViewMode = ref<'follow' | 'overview'>('follow') // 视角模式：'follow' 跟随小车 / 'overview' 完整路线全景
-const cruiseDist = ref(0)
-const cruiseTrack = ref<CruiseTrack | null>(null)
-const cruiseCurrentState = ref<CruiseState | null>(null)
+// 视角模式：'leg' 分段取景（每段路单独框住，到站时飞向下一段）/ 'follow' 跟随小车 / 'overview' 完整路线全景
+type CruiseViewMode = 'leg' | 'follow' | 'overview'
+const cruiseViewMode = ref<CruiseViewMode>('leg')
+const cruiseTime = ref(0) // 时间轴上的当前时刻（秒，1 倍速时间）
+// 轨迹点多，用 shallowRef 避免深层响应式代理拖慢每帧采样
+const cruiseTrack = shallowRef<CruiseTrack | null>(null)
+const cruiseTimeline = shallowRef<CruiseTimeline | null>(null)
+const cruiseMoment = shallowRef<CruiseMoment | null>(null)
+const cruiseCurrentState = shallowRef<CruiseState | null>(null)
 const cruiseProgressSlider = ref(0) // 0~1000
 
 // Leaflet 巡游图层与覆盖物
@@ -61,11 +71,23 @@ let cruiseLastTimestamp: number | null = null
 // 每帧只追加新驶过的顶点，不再整段重建数组。
 let passedBuf: [number, number][] = []
 let passedBufIdx = -1
+// 镜头状态
+let camKey = '' // 当前镜头框住的对象：'all' / 'leg-i'
+let camBusyUntil = 0 // 飞行动画结束时刻（performance.now 毫秒），期间不做跟随平移
+let followCenter: [number, number] | null = null // 跟随模式下平滑后的镜头中心
+let smoothHeading: number | null = null // 平滑后的车头朝向
+let lastArrivedAt = -1 // 上一次弹出站牌的站点（避免每帧重复触发动画）
+let lastPosKey = '' // 上一帧小车位置（没变就不重设折线）
 
 // ───────────────────────── 16:9 视频导出状态 ─────────────────────────
 const exportModalOpen = ref(false)
 const exportSpeed = ref<number>(1) // 默认 1 倍速 (1x, 2x, 4x, 8x)
-const exportIsOverview = ref<boolean>(true) // 是否全景（默认推荐全景展示完整路线）
+const exportViewMode = ref<CruiseViewMode>('leg') // 导出视频的视角（默认推荐分段取景）
+const EXPORT_VIEW_OPTIONS: Array<{ mode: CruiseViewMode; icon: string; iconClass: string; title: string; desc: string; recommended?: boolean }> = [
+  { mode: 'leg', icon: '🎬', iconClass: 'icon-blue', title: '分段取景', desc: '每段路单独框住，到站后镜头飞向下一段', recommended: true },
+  { mode: 'follow', icon: '🎯', iconClass: 'icon-orange', title: '跟随视角', desc: '镜头平滑跟拍小轿车，看清沿途道路' },
+  { mode: 'overview', icon: '🌐', iconClass: 'icon-blue', title: '全景视角', desc: '全程固定一个画面，完整展示路线全貌' },
+]
 const exportRange = ref<string>('all') // 'all' 或 dayId
 
 const isRecording = ref(false)
@@ -73,18 +95,70 @@ const recordingSeconds = ref(0)
 let recordingTimer: number | null = null
 let activeRecordingSession: RecordingSession | null = null
 
+/** 秒 → m:ss */
+function fmtClock(sec: number): string {
+  const v = Math.max(0, Math.round(sec))
+  return `${Math.floor(v / 60)}:${String(v % 60).padStart(2, '0')}`
+}
+
+/** 里程数字：短途保留小数，长途取整 */
+function fmtKm(m: number, totalM: number): string {
+  const km = Math.max(0, m) / 1000
+  if (totalM < 10000) return km.toFixed(2)
+  if (totalM < 100000) return km.toFixed(1)
+  return Math.round(km).toLocaleString('en-US')
+}
+
+/** 巡游 HUD（借鉴 map-motion）：开场标题卡、左上路段说明、右上里程表、片尾总结 */
+const cruiseHud = computed(() => {
+  const track = cruiseTrack.value
+  const tl = cruiseTimeline.value
+  const m = cruiseMoment.value
+  const trip = store.trip
+  if (!track || !tl || !m || !trip) return null
+  const ms = track.milestones
+  const total = track.totalDistance
+  const first = ms[0]
+  const last = ms[ms.length - 1]
+  const dayCount = new Set(ms.map((x) => x.dayIndex)).size
+  const totalText = `${fmtKm(total, total)} km`
+  const isLoop = !!first && !!last && ms.length > 2 && Math.abs(first.stop.lng - last.stop.lng) < 5e-4 && Math.abs(first.stop.lat - last.stop.lat) < 5e-4
+  const route = !first ? '' : isLoop ? `${first.name} 出发环线` : last && first.name !== last.name ? `${first.name} → ${last.name}` : first.name
+
+  const leg = tl.legs[m.leg]
+  let caption: { text: string; sub: string } | null = null
+  if (leg && (m.phase === 'drive' || m.phase === 'stay')) {
+    const a = ms[leg.from]
+    const b = ms[leg.to]
+    const date = fmtDate(dateOfDay(trip.startDate, leg.dayIndex))
+    caption = {
+      text: a && b && a !== b ? `${a.name} → ${b.name}` : b?.name || a?.name || '',
+      sub: [`DAY ${leg.dayIndex + 1}`, date, `${fmtKm(leg.d1 - leg.d0, leg.d1 - leg.d0)} km`].join(' · '),
+    }
+  }
+
+  // 开场标题卡在前 85% 显示，片尾总结在拉回全景后出现
+  const intro = m.phase === 'intro' && m.phaseProgress < 0.85
+    ? { text: trip.title || track.targetLabel, sub: [route, dayCount > 1 ? `${dayCount} 天` : track.targetLabel, totalText].filter(Boolean).join(' · ') }
+    : null
+  const stopCount = new Set(ms.map((x) => `${x.stop.lng.toFixed(4)},${x.stop.lat.toFixed(4)}`)).size
+  const outro = m.phase === 'outro' && m.phaseProgress > 0.25
+    ? { text: trip.title || track.targetLabel, sub: [`全程 ${totalText}`, dayCount > 1 ? `${dayCount} 天` : '', `${stopCount} 个地点`].filter(Boolean).join(' · ') }
+    : null
+
+  return {
+    intro,
+    outro,
+    caption,
+    odometer: m.phase === 'intro' ? null : { value: fmtKm(m.dist, total), total: totalText },
+  }
+})
+
 const estimateRecordSeconds = computed(() => {
   if (!store.trip) return 20
-  const track = buildCruiseTrack(
-    store.trip,
-    exportRange.value,
-    store.legPaths,
-    store.routePointsOf,
-  )
+  const track = buildCruiseTrack(store.trip, exportRange.value, store.legPaths, store.routePointsOf)
   if (!track) return 20
-  const total = track.totalDistance
-  const baseTimeSec = Math.max(22, Math.min(50, (total / 1000) * 0.18 + 20))
-  return Math.round(baseTimeSec / exportSpeed.value)
+  return Math.round(buildCruiseTimeline(track).duration / exportSpeed.value)
 })
 
 /** 容器当前是否可见（移动端地图收起时宽度为 0，此时不初始化/不绘制） */
@@ -578,9 +652,10 @@ function carMarkerHtml(state: CruiseState): string {
   return `
     <div class="cruise-car-anchor">
       <!-- 车顶气泡悬浮标签（不随车身旋转，端正向上展示城市与地点） -->
-      <div class="cruise-roof-bubble" id="cruise-roof-bubble">
+      <div class="cruise-arrive-ring" id="cruise-arrive-ring"></div>
+      <div class="cruise-roof-bubble is-hidden" id="cruise-roof-bubble">
         <div class="cruise-roof-header">
-          <span class="cruise-roof-badge" style="background: linear-gradient(135deg, #ff5722, #ea580c); box-shadow: 0 2px 6px rgba(234,88,12,0.4);">🚗 经过地点</span>
+          <span class="cruise-roof-badge" id="cruise-roof-badge" style="background: linear-gradient(135deg, #ff5722, #ea580c); box-shadow: 0 2px 6px rgba(234,88,12,0.4);">出发</span>
           <span class="cruise-roof-city" id="cruise-roof-city">${safeCity}</span>
         </div>
         <div class="cruise-roof-place" id="cruise-roof-place" title="${safePlace}">${safePlace}</div>
@@ -669,114 +744,418 @@ function toggleCruiseMode() {
   }
 }
 
-/** 启动巡游播放 */
+/** 启动巡游播放（默认范围：当前单日视角选该天，否则全程） */
 function startCruise() {
   if (!store.trip) {
     store.notify('请先打开或创建一份路书', 'error')
     return
   }
+  cruiseRange.value = store.view && store.view !== 'overview' ? store.view : 'all'
+  if (prepareCruise(cruiseRange.value)) playFrom(0)
+}
 
-  // 若当前为单日视角，默认选定该天，否则选定全程
-  if (store.view && store.view !== 'overview') {
-    cruiseRange.value = store.view
-  } else {
-    cruiseRange.value = 'all'
-  }
-
-  const track = buildCruiseTrack(
-    store.trip,
-    cruiseRange.value,
-    store.legPaths,
-    store.routePointsOf,
-  )
-
+/**
+ * 按范围构建轨迹与时间轴、铺好图层并定位到开场画面；不开始播放。
+ * 失败（没有可行驶路段）时提示并返回 false。
+ */
+function prepareCruise(range: string): boolean {
+  if (!store.trip) return false
+  const track = buildCruiseTrack(store.trip, range, store.legPaths, store.routePointsOf)
   if (!track || track.points.length < 2) {
     store.notify('当前路线暂无可行驶路段，请先添加至少 2 个地点', 'error')
-    return
+    return false
   }
-
+  if (cruiseRafId !== null) {
+    cancelAnimationFrame(cruiseRafId)
+    cruiseRafId = null
+  }
   cruiseTrack.value = track
-  cruiseDist.value = 0
+  cruiseTimeline.value = buildCruiseTimeline(track)
+  // 巡游期间允许 Leaflet 1/4 级缩放，整段 / 全程取景能把路线放到合适大小（退出时恢复整数级）
+  if (loadedProvider === 'osm' && map) map.options.zoomSnap = 0.25
   cruiseActive.value = true
-  cruisePlaying.value = true
-
+  cruisePlaying.value = false
+  cruiseTime.value = 0
+  camKey = ''
+  followCenter = null
+  smoothHeading = null
+  lastArrivedAt = -1
   const initialState = sampleCruiseTrack(track, 0)
   cruiseCurrentState.value = initialState
-  cruiseProgressSlider.value = 0
-
   initCruiseMapOverlays(initialState)
+  renderCruiseAt(0, { instant: true })
+  return true
+}
 
-  // 根据当前选定的视角模式初始化视野
-  if (cruiseViewMode.value === 'overview') {
-    fitCruiseOverview()
-  } else {
-    // 跟随模式：镜头对准起点
-    if (loadedProvider === 'osm' && map) {
-      map.setView([initialState.lat, initialState.lng], Math.max(map.getZoom(), 13))
-    } else if (loadedProvider === 'amap' && map) {
-      map.setZoomAndCenter(Math.max(map.getZoom(), 13), [initialState.lng, initialState.lat])
-    }
-  }
-
+/** 从时间轴 t 秒处开始播放 */
+function playFrom(t: number) {
+  if (!cruiseTimeline.value) return
+  cruiseTime.value = t
+  cruisePlaying.value = true
   cruiseLastTimestamp = performance.now()
+  if (cruiseRafId !== null) cancelAnimationFrame(cruiseRafId)
   cruiseRafId = requestAnimationFrame(cruiseLoop)
 }
 
-/** 将地图视野平滑适配到当前巡游路线全貌（全景模式） */
-function fitCruiseOverview() {
-  if (!map || !cruiseTrack.value || !cruiseTrack.value.points.length) return
-  const pts = cruiseTrack.value.points
+/** 切换视角模式：分段取景 / 跟随小车 / 全景 */
+function setViewMode(mode: CruiseViewMode) {
+  cruiseViewMode.value = mode
+  camKey = '' // 下一帧按新模式重新取景（短过渡）
+  followCenter = null
+  if (cruiseActive.value && !cruisePlaying.value) renderCruiseAt(cruiseTime.value, { camDuration: 0.6 })
+}
 
-  // 顶部 60px，右侧 60px，底部 150px（避开底部的悬浮播放控制面板），左侧 60px
-  const padTop = 60
-  const padRight = 60
-  const padBottom = 150
-  const padLeft = 60
-
-  if (loadedProvider === 'osm' && lib) {
-    const latlngs = pts.map((p) => [p.lat, p.lng] as [number, number])
-    if (latlngs.length === 1) {
-      map.setView(latlngs[0], 12)
-    } else {
-      map.fitBounds(lib.latLngBounds(latlngs), {
-        paddingTopLeft: [padLeft, padTop],
-        paddingBottomRight: [padRight, padBottom],
-        maxZoom: 16,
-        animate: true,
-      })
+/** 切换播放/暂停 */
+function togglePlay() {
+  if (!cruiseActive.value || !cruiseTimeline.value) return
+  if (cruisePlaying.value) {
+    cruisePlaying.value = false
+    if (cruiseRafId !== null) {
+      cancelAnimationFrame(cruiseRafId)
+      cruiseRafId = null
     }
-  } else if (loadedProvider === 'amap' && lib) {
-    let minLng = pts[0].lng
-    let maxLng = pts[0].lng
-    let minLat = pts[0].lat
-    let maxLat = pts[0].lat
-    for (let i = 1; i < pts.length; i++) {
-      const p = pts[i]
+    return
+  }
+  // 已到结尾：从头开始
+  if (cruiseTime.value >= cruiseTimeline.value.duration) restartCruise()
+  else playFrom(cruiseTime.value)
+}
+
+/** 从头重新巡游 */
+function restartCruise() {
+  if (!cruiseTimeline.value) return
+  camKey = ''
+  lastArrivedAt = -1
+  renderCruiseAt(0, { instant: true })
+  playFrom(0)
+}
+
+/** 切换单天或全天范围 */
+function handleRangeChange() {
+  if (prepareCruise(cruiseRange.value)) playFrom(0)
+}
+
+/** 拖拽进度条（按时间轴定位，镜头直接跳到对应画面） */
+function onProgressSliderInput(e: Event) {
+  const tl = cruiseTimeline.value
+  if (!tl) return
+  const val = Number((e.target as HTMLInputElement).value)
+  camKey = ''
+  renderCruiseAt((val / 1000) * tl.duration, { instant: true })
+}
+
+/** 帧动画主循环：按真实时间 × 倍速推进时间轴 */
+function cruiseLoop(timestamp: number) {
+  const tl = cruiseTimeline.value
+  if (!cruiseActive.value || !cruisePlaying.value || !tl) return
+
+  const lastTime = cruiseLastTimestamp ?? timestamp
+  const dt = Math.min((timestamp - lastTime) / 1000, 0.1) // 限制最大 0.1s 防止切后台卡顿跳跃
+  cruiseLastTimestamp = timestamp
+
+  const t = cruiseTime.value + dt * cruiseSpeed.value
+  if (t >= tl.duration) {
+    renderCruiseAt(tl.duration, { dtReal: dt })
+    cruisePlaying.value = false
+    cruiseRafId = null
+    if (isRecording.value) {
+      void finishRecording()
+    } else {
+      store.notify('🎉 巡游播放完成！')
+    }
+    return
+  }
+
+  renderCruiseAt(t, { dtReal: dt })
+  cruiseRafId = requestAnimationFrame(cruiseLoop)
+}
+
+/** 增量维护已行驶路线：前进时只追加新顶点，拖回进度时截断，末尾始终是小车当前位置 */
+function syncPassedBuffer(state: CruiseState): [number, number][] {
+  const pts = cruiseTrack.value?.points ?? []
+  const toPair = (lng: number, lat: number): [number, number] =>
+    loadedProvider === 'osm' ? [lat, lng] : [lng, lat]
+  if (passedBuf.length === passedBufIdx + 2) passedBuf.pop() // 去掉上一帧的小车位置
+  const want = Math.min(state.passedIdx, pts.length - 1)
+  if (want < passedBufIdx) {
+    passedBuf.length = want + 1
+  } else {
+    for (let i = passedBufIdx + 1; i <= want; i++) passedBuf.push(toPair(pts[i].lng, pts[i].lat))
+  }
+  passedBufIdx = want
+  passedBuf.push(toPair(state.lng, state.lat))
+  return passedBuf
+}
+
+/** 渲染时间轴 t 秒处的画面：小车、已走路线、车顶站牌、HUD 与镜头 */
+function renderCruiseAt(t: number, opts: { instant?: boolean; dtReal?: number; camDuration?: number } = {}) {
+  const track = cruiseTrack.value
+  const tl = cruiseTimeline.value
+  if (!track || !tl) return
+
+  const m = timelineAt(tl, track, t)
+  cruiseTime.value = m.t
+  cruiseMoment.value = m
+  cruiseProgressSlider.value = Math.round((m.t / tl.duration) * 1000)
+
+  const state = sampleCruiseTrack(track, m.dist, headingLookaheadM())
+  cruiseCurrentState.value = state
+
+  // 1. 小车位置与已走路线。位置没变（停留、开场、收尾）时不重设：
+  //    这几段正是镜头飞行的时候，Leaflet 缩放动画进行中重设折线会按错误的参照投影，线会和底下的路线错开
+  const posKey = `${state.passedIdx}:${state.lng.toFixed(7)},${state.lat.toFixed(7)}`
+  if (posKey !== lastPosKey || opts.instant) {
+    lastPosKey = posKey
+    const passed = syncPassedBuffer(state)
+    if (loadedProvider === 'osm') {
+      cruiseCarMarkerLeaflet?.setLatLng([state.lat, state.lng])
+      cruisePolylineLeaflet?.setLatLngs(passed)
+    } else if (loadedProvider === 'amap') {
+      cruiseCarMarkerAmap?.setPosition([state.lng, state.lat])
+      cruisePolylineAmap?.setPath(passed.slice()) // 高德可能持有数组引用，传浅拷贝避免下帧修改影响其内部状态
+    }
+  }
+
+  // 2. 车身朝向：按时间做角度平滑（不追每个之字弯）
+  const dtReal = opts.dtReal ?? 0
+  if (smoothHeading === null || opts.instant || dtReal <= 0) smoothHeading = state.heading
+  else {
+    const diff = ((state.heading - smoothHeading + 540) % 360) - 180
+    smoothHeading = (smoothHeading + diff * (1 - Math.exp(-dtReal / 0.12)) + 360) % 360
+  }
+  const carHull = document.getElementById('cruise-car-hull')
+  if (carHull) carHull.style.transform = `rotate(${Math.round(smoothHeading)}deg)`
+
+  // 3. 车顶站牌：只在到站停留、开场、收尾时出现，行驶中收起
+  updateRoofBubble(m)
+
+  // 4. 镜头
+  applyCruiseCamera(m, state, dtReal, opts)
+}
+
+/** 车顶站牌：到站时弹出「DAY n · 第 k 站 / 地名」，并在车下放一圈涟漪 */
+function updateRoofBubble(m: CruiseMoment) {
+  const track = cruiseTrack.value
+  if (!track) return
+  const bubble = document.getElementById('cruise-roof-bubble')
+  const ring = document.getElementById('cruise-arrive-ring')
+  let mi = -1
+  if (m.phase === 'stay') mi = m.stayAt
+  else if (m.phase === 'intro') mi = 0
+  const show = mi >= 0 && !!track.milestones[mi]
+  if (bubble) bubble.classList.toggle('is-hidden', !show)
+  if (!show) {
+    lastArrivedAt = -1
+    return
+  }
+  const ms = track.milestones[mi]
+  const badge = document.getElementById('cruise-roof-badge')
+  const cityEl = document.getElementById('cruise-roof-city')
+  const placeEl = document.getElementById('cruise-roof-place')
+  const statusEl = document.getElementById('cruise-roof-status')
+  if (badge) badge.textContent = m.phase === 'intro' ? '出发' : `D${ms.dayIndex + 1} · 第${ms.stopIndex}站`
+  if (cityEl) cityEl.textContent = ms.city
+  if (placeEl) {
+    placeEl.textContent = ms.name
+    placeEl.title = ms.name
+  }
+  if (statusEl) {
+    const meta = KIND_META[ms.stop.kind]
+    statusEl.textContent = meta ? `${meta.emoji} ${meta.label}` : ''
+  }
+  if (mi !== lastArrivedAt) {
+    lastArrivedAt = mi
+    // 重新触发弹出与涟漪动画
+    for (const node of [bubble, ring]) {
+      if (!node) continue
+      node.classList.remove('pop')
+      void (node as HTMLElement).offsetWidth
+      node.classList.add('pop')
+    }
+  }
+}
+
+// ───────────────────────── 巡游镜头 ─────────────────────────
+// 借鉴 map-motion：每段路单独取景，段与段之间用 flyTo（先拉远再推近）在到站停留时过渡；
+// 跟随模式下镜头中心对准车前方一点，并按时间平滑，不再每帧硬拽到车上。
+
+/** 地图当前比例尺下约 28 像素对应的米数（车头朝向的前瞻距离） */
+function headingLookaheadM(): number {
+  if (!map) return 15
+  const zoom = map.getZoom?.() ?? 12
+  const lat = cruiseCurrentState.value?.lat ?? 35
+  const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / Math.pow(2, zoom + 8)
+  return Math.max(10, Math.min(5000, mpp * 28))
+}
+
+/** 镜头留白：上方给 HUD，下方按播放控制面板的实际高度留出（录制时面板隐藏，留白收小） */
+function camPadding(withTitleCard = false) {
+  const w = el.value?.clientWidth || 800
+  const h = el.value?.clientHeight || 600
+  let bottom = Math.min(70, h * 0.1)
+  const panel = el.value?.closest('.mapwrap')?.querySelector('.cruise-panel-float') as HTMLElement | null
+  if (panel && el.value && !isRecording.value) {
+    const mapRect = el.value.getBoundingClientRect()
+    const panelRect = panel.getBoundingClientRect()
+    bottom = Math.max(bottom, mapRect.bottom - panelRect.top + 24)
+  }
+  // 开场 / 片尾的标题卡在画面上方约 14%~30% 处，全景取景时把路线压到卡片下面
+  const top = withTitleCard ? Math.min(h * 0.5, h * 0.16 + 150) : Math.min(130, h * 0.2)
+  return {
+    top: Math.round(top + (w < 640 && !isRecording.value ? 56 : 0)), // 手机上 HUD 在按钮栏下面
+    bottom: Math.round(Math.min(bottom, h * 0.5)),
+    side: Math.round(Math.min(80, Math.max(w * 0.09, Math.min(48, w * 0.12)))),
+  }
+}
+
+/** 轨迹上 [d0, d1] 之间的点（抽样到最多 400 个，用于取景） */
+function trackPointsBetween(d0: number, d1: number): CruisePoint[] {
+  const pts = cruiseTrack.value?.points ?? []
+  const out = pts.filter((p) => p.dist >= d0 - 1 && p.dist <= d1 + 1)
+  if (out.length < 2) {
+    const s0 = cruiseTrack.value ? sampleCruiseTrack(cruiseTrack.value, d0) : null
+    const s1 = cruiseTrack.value ? sampleCruiseTrack(cruiseTrack.value, d1) : null
+    return [s0, s1].filter(Boolean).map((s) => ({ lng: s!.lng, lat: s!.lat, dist: 0 }))
+  }
+  const step = Math.max(1, Math.floor(out.length / 400))
+  return out.filter((_, i) => i % step === 0 || i === out.length - 1)
+}
+
+/** 把一组点框进画面；durS = 0 为瞬间定位 */
+function camFitPoints(pts: Array<{ lng: number; lat: number }>, durS: number, withTitleCard = false) {
+  if (!map || !lib || !pts.length) return
+  const pad = camPadding(withTitleCard)
+  if (loadedProvider === 'osm') {
+    const b = lib.latLngBounds(pts.map((p) => [p.lat, p.lng]))
+    const o = { paddingTopLeft: [pad.side, pad.top], paddingBottomRight: [pad.side, pad.bottom], maxZoom: 15 }
+    if (durS > 0) map.flyToBounds(b, { ...o, duration: durS })
+    else map.fitBounds(b, { ...o, animate: false })
+  } else if (loadedProvider === 'amap') {
+    let minLng = Infinity
+    let minLat = Infinity
+    let maxLng = -Infinity
+    let maxLat = -Infinity
+    for (const p of pts) {
       if (p.lng < minLng) minLng = p.lng
       if (p.lng > maxLng) maxLng = p.lng
       if (p.lat < minLat) minLat = p.lat
       if (p.lat > maxLat) maxLat = p.lat
     }
-    const bounds = new lib.Bounds([minLng, minLat], [maxLng, maxLat])
-    map.setBounds(bounds, false, [padTop, padRight, padBottom, padLeft])
+    map.setBounds(new lib.Bounds([minLng, minLat], [maxLng, maxLat]), durS <= 0, [pad.top, pad.side, pad.bottom, pad.side])
+    if (map.getZoom() > 15) map.setZoom(15, durS <= 0)
   }
+  camBusyUntil = performance.now() + Math.max(0, durS) * 1000 + 80
 }
 
-/** 切换视角模式：跟随（特写小车） / 全景（显示完整路线） */
-function setViewMode(mode: 'follow' | 'overview') {
-  cruiseViewMode.value = mode
-  if (mode === 'overview') {
-    fitCruiseOverview()
-  } else {
-    // 切换为跟随视角：镜头平滑对准当前小车
-    if (cruiseCurrentState.value && map) {
-      const { lat, lng } = cruiseCurrentState.value
-      if (loadedProvider === 'osm') {
-        map.setView([lat, lng], Math.max(map.getZoom(), 13), { animate: true })
-      } else if (loadedProvider === 'amap') {
-        map.setZoomAndCenter(Math.max(map.getZoom(), 13), [lng, lat])
-      }
+/** 飞到某点某缩放级别；durS = 0 为瞬间定位 */
+function camFlyTo(lng: number, lat: number, zoom: number, durS: number) {
+  if (!map) return
+  if (loadedProvider === 'osm') {
+    const z = Math.round(zoom * 4) / 4 // 巡游期间 zoomSnap = 0.25
+    if (durS > 0) map.flyTo([lat, lng], z, { duration: durS })
+    else map.setView([lat, lng], z, { animate: false })
+  } else if (loadedProvider === 'amap') {
+    map.setZoomAndCenter(zoom, [lng, lat], durS <= 0, Math.round(durS * 1000))
+  }
+  camBusyUntil = performance.now() + Math.max(0, durS) * 1000 + 80
+}
+
+function camPanTo(lng: number, lat: number) {
+  if (!map) return
+  if (loadedProvider === 'osm') map.panTo([lat, lng], { animate: false })
+  else if (loadedProvider === 'amap') map.setCenter([lng, lat], true)
+}
+
+/** 跟随模式的缩放级别：比整段取景近约 1.6 级（map-motion 用 2.2 级；网页实时播放车速更快，退一点免得画面飞掠），限制在 9~16 级 */
+function followZoomFor(pts: Array<{ lng: number; lat: number }>): number {
+  const w = el.value?.clientWidth || 800
+  const h = el.value?.clientHeight || 600
+  const merc = (p: { lng: number; lat: number }) => {
+    const s = Math.sin((Math.max(-85, Math.min(85, p.lat)) * Math.PI) / 180)
+    return [(p.lng + 180) / 360, 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)]
+  }
+  let x0 = Infinity
+  let x1 = -Infinity
+  let y0 = Infinity
+  let y1 = -Infinity
+  for (const p of pts) {
+    const [x, y] = merc(p)
+    x0 = Math.min(x0, x)
+    x1 = Math.max(x1, x)
+    y0 = Math.min(y0, y)
+    y1 = Math.max(y1, y)
+  }
+  const fit = Math.log2(Math.min((w * 0.7) / (Math.max(x1 - x0, 1e-9) * 256), (h * 0.5) / (Math.max(y1 - y0, 1e-9) * 256)))
+  return Math.max(9, Math.min(16, fit + 1.6))
+}
+
+/** 当前时刻镜头应该框住什么：'all' 全程，或 'leg-i' 第 i 段 */
+function desiredCamKey(m: CruiseMoment): string {
+  const tl = cruiseTimeline.value
+  if (!tl || cruiseViewMode.value === 'overview') return 'all'
+  if (m.phase === 'intro') return m.phaseProgress < 0.55 ? 'all' : 'leg-0'
+  if (m.phase === 'outro') return 'all'
+  // 到站后先停一会儿看清站点，再飞向下一段
+  if (m.phase === 'stay') return m.phaseProgress < 0.35 ? `leg-${m.leg}` : `leg-${Math.min(tl.legs.length - 1, m.leg + 1)}`
+  return `leg-${m.leg}`
+}
+
+/** 这次镜头过渡能用多少真实秒：在下一段开车前飞完 */
+function camFlightSeconds(m: CruiseMoment): number {
+  const tl = cruiseTimeline.value
+  if (!tl) return 0
+  let until = m.t + 0.6
+  if (m.phase === 'intro') until = tl.introEnd
+  else if (m.phase === 'stay') until = tl.stays[m.leg]?.t1 ?? m.t
+  else if (m.phase === 'outro') until = Math.min(tl.duration, m.t + 1.6)
+  const real = (until - m.t) / Math.max(1, cruiseSpeed.value)
+  const d = Math.min(1.4, real * 0.85)
+  return d < 0.25 ? 0 : d
+}
+
+function applyCruiseCamera(m: CruiseMoment, state: CruiseState, dtReal: number, opts: { instant?: boolean; camDuration?: number }) {
+  const tl = cruiseTimeline.value
+  const track = cruiseTrack.value
+  if (!map || !tl || !track) return
+  const key = desiredCamKey(m)
+
+  if (key !== camKey) {
+    camKey = key
+    const dur = opts.instant ? 0 : (opts.camDuration ?? camFlightSeconds(m))
+    if (key === 'all') {
+      const withCard = m.phase === 'intro' || m.phase === 'outro' || cruiseViewMode.value === 'overview'
+      camFitPoints(trackPointsBetween(0, track.totalDistance), dur, withCard)
+      return
     }
+    const leg = tl.legs[Number(key.slice(4))]
+    if (!leg) return
+    const legPts = trackPointsBetween(leg.d0, leg.d1)
+    if (cruiseViewMode.value === 'leg') {
+      camFitPoints(legPts, dur)
+    } else {
+      // 跟随：飞到车所在位置（停留时就是下一段起点）
+      const z = followZoomFor(legPts)
+      followCenter = [state.lng, state.lat]
+      camFlyTo(state.lng, state.lat, z, dur)
+    }
+    return
+  }
+
+  // 跟随模式的行驶中：镜头中心对准车前方一点，按时间平滑（飞行动画进行中不打断）
+  if (cruiseViewMode.value === 'follow' && m.phase === 'drive' && performance.now() > camBusyUntil) {
+    const leg = tl.legs[m.leg]
+    const lead = leg ? Math.max(30, Math.min(2000, (leg.d1 - leg.d0) * 0.04)) : 0
+    // 指数平滑追一个匀速目标会落后「速度 × 时间常数」，所以瞄准 τ 秒之后车的位置来抵消滞后
+    const tau = 0.25 / Math.sqrt(Math.max(1, cruiseSpeed.value))
+    const future = timelineAt(tl, track, m.t + tau * cruiseSpeed.value).dist
+    const ahead = sampleCruiseTrack(track, Math.min(track.totalDistance, future + lead))
+    const target: [number, number] = [ahead.lng, ahead.lat]
+    if (!followCenter || opts.instant || dtReal <= 0) followCenter = target
+    else {
+      const k = 1 - Math.exp(-dtReal / tau)
+      followCenter = [followCenter[0] + (target[0] - followCenter[0]) * k, followCenter[1] + (target[1] - followCenter[1]) * k]
+    }
+    camPanTo(followCenter[0], followCenter[1])
   }
 }
 
@@ -785,6 +1164,7 @@ function initCruiseMapOverlays(initialState: CruiseState) {
   const allPts = cruiseTrack.value?.points ?? []
   passedBuf = []
   passedBufIdx = -1
+  lastPosKey = ''
   const allCoordsLeaflet = allPts.map((p) => [p.lat, p.lng] as [number, number])
   const allCoordsAmap = allPts.map((p) => [p.lng, p.lat] as [number, number])
 
@@ -894,6 +1274,10 @@ function initCruiseMapOverlays(initialState: CruiseState) {
 
 /** 退出并清理巡游播放 */
 function stopCruise() {
+  if (loadedProvider === 'osm' && map && map.options.zoomSnap !== 1) {
+    map.options.zoomSnap = 1
+    map.setZoom(Math.round(map.getZoom()), { animate: false })
+  }
   cruiseActive.value = false
   cruisePlaying.value = false
   if (cruiseRafId !== null) {
@@ -929,182 +1313,15 @@ function stopCruise() {
 
   cruiseTrack.value = null
   cruiseCurrentState.value = null
+  cruiseMoment.value = null
+  cruiseTimeline.value = null
+  camKey = ''
+  followCenter = null
+  smoothHeading = null
+  lastArrivedAt = -1
 
   // 恢复普通路线视野
   redraw()
-}
-
-/** 切换播放/暂停 */
-function togglePlay() {
-  if (!cruiseActive.value || !cruiseTrack.value) return
-  cruisePlaying.value = !cruisePlaying.value
-
-  if (cruisePlaying.value) {
-    // 若已到终点，重新从起点开始
-    if (cruiseDist.value >= cruiseTrack.value.totalDistance) {
-      cruiseDist.value = 0
-    }
-    cruiseLastTimestamp = performance.now()
-    cruiseRafId = requestAnimationFrame(cruiseLoop)
-  } else {
-    if (cruiseRafId !== null) {
-      cancelAnimationFrame(cruiseRafId)
-      cruiseRafId = null
-    }
-  }
-}
-
-/** 从头重新巡游 */
-function restartCruise() {
-  if (!cruiseTrack.value) return
-  cruiseDist.value = 0
-  cruisePlaying.value = true
-  updateCruiseFrame()
-  cruiseLastTimestamp = performance.now()
-  if (cruiseRafId !== null) cancelAnimationFrame(cruiseRafId)
-  cruiseRafId = requestAnimationFrame(cruiseLoop)
-}
-
-/** 切换单天或全天范围 */
-function handleRangeChange() {
-  if (!store.trip) return
-  const track = buildCruiseTrack(
-    store.trip,
-    cruiseRange.value,
-    store.legPaths,
-    store.routePointsOf,
-  )
-  if (!track || track.points.length < 2) {
-    store.notify('所选天数暂无可行驶路线', 'error')
-    return
-  }
-
-  cruiseTrack.value = track
-  cruiseDist.value = 0
-  cruisePlaying.value = true
-  const state = sampleCruiseTrack(track, 0)
-  cruiseCurrentState.value = state
-  initCruiseMapOverlays(state)
-  updateCruiseFrame()
-
-  if (cruiseViewMode.value === 'overview') {
-    fitCruiseOverview()
-  } else {
-    if (loadedProvider === 'osm' && map) {
-      map.panTo([state.lat, state.lng])
-    } else if (loadedProvider === 'amap' && map) {
-      map.panTo([state.lng, state.lat])
-    }
-  }
-
-  cruiseLastTimestamp = performance.now()
-  if (cruiseRafId !== null) cancelAnimationFrame(cruiseRafId)
-  cruiseRafId = requestAnimationFrame(cruiseLoop)
-}
-
-/** 拖拽进度条 */
-function onProgressSliderInput(e: Event) {
-  if (!cruiseTrack.value) return
-  const val = Number((e.target as HTMLInputElement).value)
-  cruiseProgressSlider.value = val
-  cruiseDist.value = (val / 1000) * cruiseTrack.value.totalDistance
-  updateCruiseFrame()
-}
-
-/** 帧动画主循环 */
-function cruiseLoop(timestamp: number) {
-  if (!cruiseActive.value || !cruisePlaying.value || !cruiseTrack.value) return
-
-  const lastTime = cruiseLastTimestamp ?? timestamp
-  const dt = Math.min((timestamp - lastTime) / 1000, 0.1) // 限制最大 0.1s 防止切后台卡顿跳跃
-  cruiseLastTimestamp = timestamp
-
-  // 根据总里程自适应基准速度（全长约 28~45 秒），并叠加倍速系数
-  const total = cruiseTrack.value.totalDistance
-  const baseTimeSec = Math.max(22, Math.min(50, (total / 1000) * 0.18 + 20))
-  const v0 = total / baseTimeSec
-  const v = v0 * cruiseSpeed.value
-
-  cruiseDist.value += v * dt
-
-  if (cruiseDist.value >= total) {
-    cruiseDist.value = total
-    cruisePlaying.value = false
-    updateCruiseFrame()
-    if (isRecording.value) {
-      void finishRecording()
-    } else {
-      store.notify('🎉 巡游播放完成！')
-    }
-    return
-  }
-
-  updateCruiseFrame()
-  cruiseRafId = requestAnimationFrame(cruiseLoop)
-}
-
-/** 增量维护已行驶路线：前进时只追加新顶点，拖回进度时截断，末尾始终是小车当前位置 */
-function syncPassedBuffer(state: CruiseState): [number, number][] {
-  const pts = cruiseTrack.value?.points ?? []
-  const toPair = (lng: number, lat: number): [number, number] =>
-    loadedProvider === 'osm' ? [lat, lng] : [lng, lat]
-  if (passedBuf.length === passedBufIdx + 2) passedBuf.pop() // 去掉上一帧的小车位置
-  const want = Math.min(state.passedIdx, pts.length - 1)
-  if (want < passedBufIdx) {
-    passedBuf.length = want + 1
-  } else {
-    for (let i = passedBufIdx + 1; i <= want; i++) passedBuf.push(toPair(pts[i].lng, pts[i].lat))
-  }
-  passedBufIdx = want
-  passedBuf.push(toPair(state.lng, state.lat))
-  return passedBuf
-}
-
-/** 采样并同步渲染小轿车位置、旋转与车顶城市地点信息 */
-function updateCruiseFrame() {
-  if (!cruiseTrack.value) return
-
-  const state = sampleCruiseTrack(cruiseTrack.value, cruiseDist.value)
-  cruiseCurrentState.value = state
-  cruiseProgressSlider.value = Math.round(state.progress * 1000)
-
-  // 1. 同步小车经纬度与走过路线
-  const passed = syncPassedBuffer(state)
-  if (loadedProvider === 'osm') {
-    cruiseCarMarkerLeaflet?.setLatLng([state.lat, state.lng])
-    cruisePolylineLeaflet?.setLatLngs(passed)
-    if (cruiseViewMode.value === 'follow' && map) {
-      map.panTo([state.lat, state.lng], { animate: false })
-    }
-  } else if (loadedProvider === 'amap') {
-    cruiseCarMarkerAmap?.setPosition([state.lng, state.lat])
-    cruisePolylineAmap?.setPath(passed.slice()) // 高德可能持有数组引用，传浅拷贝避免下帧修改影响其内部状态
-    if (cruiseViewMode.value === 'follow' && map) {
-      map.panTo([state.lng, state.lat])
-    }
-  }
-
-  // 2. DOM 高性能直接更新车身旋转角与车顶文字（避免整个 Marker HTML 重新解析）
-  const carHull = document.getElementById('cruise-car-hull')
-  if (carHull) {
-    carHull.style.transform = `rotate(${Math.round(state.heading)}deg)`
-  }
-
-  const cityEl = document.getElementById('cruise-roof-city')
-  if (cityEl) {
-    cityEl.textContent = state.city
-  }
-
-  const placeEl = document.getElementById('cruise-roof-place')
-  if (placeEl) {
-    placeEl.textContent = state.place
-    placeEl.title = state.place
-  }
-
-  const statusEl = document.getElementById('cruise-roof-status')
-  if (statusEl) {
-    statusEl.textContent = state.statusText
-  }
 }
 
 // ───────────────────────── 16:9 巡游视频录制与导出 ─────────────────────────
@@ -1115,7 +1332,7 @@ function openExportModal() {
     return
   }
   exportSpeed.value = cruiseSpeed.value || 1
-  exportIsOverview.value = cruiseViewMode.value === 'overview'
+  exportViewMode.value = cruiseViewMode.value
   exportRange.value = cruiseRange.value || 'all'
   exportModalOpen.value = true
 }
@@ -1127,7 +1344,7 @@ function safeTriggerVideoDownload(blob: Blob) {
   hasTriggeredDownload = true
 
   const title = store.trip?.title || '自驾路线'
-  const viewName = exportIsOverview.value ? '全景' : '跟随'
+  const viewName = { leg: '分段', follow: '跟随', overview: '全景' }[exportViewMode.value]
   const fmt = downloadVideoBlob(blob, `${title}-巡游视频-16比9-${viewName}`)
   store.notify(
     fmt.ext === 'mp4'
@@ -1146,48 +1363,24 @@ async function startExportVideo() {
   exportModalOpen.value = false
   hasTriggeredDownload = false
 
-  // 1. 应用用户选定的参数（速度、是否全景、天数范围）
+  // 1. 应用用户选定的参数（速度、视角、天数范围）
   cruiseSpeed.value = exportSpeed.value
-  cruiseViewMode.value = exportIsOverview.value ? 'overview' : 'follow'
+  cruiseViewMode.value = exportViewMode.value
   cruiseRange.value = exportRange.value
 
-  const track = buildCruiseTrack(
-    store.trip,
-    cruiseRange.value,
-    store.legPaths,
-    store.routePointsOf,
-  )
-
-  if (!track || track.points.length < 2) {
-    store.notify('当前路线暂无可行驶路段，请先添加至少 2 个地点', 'error')
-    return
-  }
-
-  cruiseTrack.value = track
-  cruiseDist.value = 0
-  cruiseActive.value = true
-  cruisePlaying.value = false // 先暂停，等待录制会话就绪后同步开始
-
-  const initialState = sampleCruiseTrack(track, 0)
-  cruiseCurrentState.value = initialState
-  cruiseProgressSlider.value = 0
-  initCruiseMapOverlays(initialState)
-
-  // 2. 进入 16:9 纯净录制视口画框模式（彻底隐藏控制面板与窗口内容）
+  // 2. 先进入 16:9 纯净录制画框（尺寸变了，取景要按新尺寸算），再铺轨迹、定位到开场画面
   isRecording.value = true
   recordingSeconds.value = 0
-
   await nextTick()
   if (loadedProvider === 'osm' && map) map.invalidateSize()
 
-  if (cruiseViewMode.value === 'overview') {
-    fitCruiseOverview()
-  } else {
-    if (loadedProvider === 'osm' && map) {
-      map.setView([initialState.lat, initialState.lng], Math.max(map.getZoom(), 13))
-    } else if (loadedProvider === 'amap' && map) {
-      map.setZoomAndCenter(Math.max(map.getZoom(), 13), [initialState.lng, initialState.lat])
-    }
+  if (!prepareCruise(cruiseRange.value)) {
+    isRecording.value = false
+    void nextTick(() => {
+      if (loadedProvider === 'osm' && map) map.invalidateSize()
+      redraw()
+    })
+    return
   }
 
   // 延时等待地图瓦片和布局渲染平稳
@@ -1222,11 +1415,11 @@ async function startExportVideo() {
       recordingSeconds.value++
     }, 1000)
 
-    // 启动小轿车巡游动画
-    cruisePlaying.value = true
-    cruiseLastTimestamp = performance.now()
-    if (cruiseRafId !== null) cancelAnimationFrame(cruiseRafId)
-    cruiseRafId = requestAnimationFrame(cruiseLoop)
+    // 授权弹窗期间瓦片已加载好：从开场画面重新定位后开始播放
+    camKey = ''
+    lastArrivedAt = -1
+    renderCruiseAt(0, { instant: true })
+    playFrom(0)
   } catch (err: any) {
     isRecording.value = false
     activeRecordingSession = null
@@ -1299,7 +1492,38 @@ function cancelRecording() {
 
 <template>
   <div class="mapwrap" :class="{ 'map-open': store.mapOpen, 'picker-open': store.pickerOpen, 'in-cruise': cruiseActive, 'recording-16-9': isRecording }">
-    <div ref="el" class="map"></div>
+    <div class="map-stage">
+      <div ref="el" class="map"></div>
+
+      <!-- 巡游 HUD：放在与地图同大的层里，录制时随地图画框一起录入 -->
+      <div v-if="cruiseActive && cruiseHud" class="cruise-hud">
+        <Transition name="hud-card">
+          <div v-if="cruiseHud.intro" class="cruise-hud-title">
+            <div class="cruise-hud-title-text">{{ cruiseHud.intro.text }}</div>
+            <div class="cruise-hud-title-sub">{{ cruiseHud.intro.sub }}</div>
+          </div>
+        </Transition>
+        <Transition name="hud-card">
+          <div v-if="cruiseHud.outro" class="cruise-hud-title is-outro">
+            <div class="cruise-hud-title-text">{{ cruiseHud.outro.text }}</div>
+            <div class="cruise-hud-title-sub">{{ cruiseHud.outro.sub }}</div>
+          </div>
+        </Transition>
+        <Transition name="hud-chip">
+          <div v-if="cruiseHud.caption" :key="cruiseHud.caption.text" class="cruise-hud-caption">
+            <div class="cruise-hud-caption-text">{{ cruiseHud.caption.text }}</div>
+            <div class="cruise-hud-caption-sub">{{ cruiseHud.caption.sub }}</div>
+          </div>
+        </Transition>
+        <Transition name="hud-chip">
+          <div v-if="cruiseHud.odometer" class="cruise-hud-odo">
+            <div class="cruise-hud-odo-label">已行驶</div>
+            <div class="cruise-hud-odo-value">{{ cruiseHud.odometer.value }}<span>KM</span></div>
+            <div class="cruise-hud-odo-total">全程 {{ cruiseHud.odometer.total }}</div>
+          </div>
+        </Transition>
+      </div>
+    </div>
 
     <!-- 地图右上角操作栏：巡游模式按钮 + 导出视频 + 关闭地图按钮 -->
     <div v-if="!store.pickerOpen && !isRecording" class="map-top-bar">
@@ -1361,6 +1585,7 @@ function cancelRecording() {
           </div>
           <div class="cruise-headline-right">
             <span class="cruise-km-text">{{ fmtDistance(cruiseCurrentState?.currentDist || 0) }} / {{ fmtDistance(cruiseTrack?.totalDistance || 0) }}</span>
+            <span class="cruise-time-text">{{ fmtClock(cruiseTime / cruiseSpeed) }} / {{ fmtClock((cruiseTimeline?.duration || 0) / cruiseSpeed) }}</span>
           </div>
         </div>
 
@@ -1411,12 +1636,20 @@ function cancelRecording() {
             </button>
           </div>
 
-          <!-- 视角模式切换：跟随 / 全景 -->
+          <!-- 视角模式切换：分段 / 跟随 / 全景 -->
           <div class="cruise-view-group">
             <button
               class="cruise-view-pill"
+              :class="{ active: cruiseViewMode === 'leg' }"
+              title="分段取景：每段路单独框住，到站后镜头飞向下一段"
+              @click="setViewMode('leg')"
+            >
+              🎬 分段
+            </button>
+            <button
+              class="cruise-view-pill"
               :class="{ active: cruiseViewMode === 'follow' }"
-              title="跟随视角：镜头锁定跟随小轿车特写"
+              title="跟随视角：镜头平滑跟拍小轿车"
               @click="setViewMode('follow')"
             >
               🎯 跟随
@@ -1497,37 +1730,24 @@ function cancelRecording() {
             <div class="export-hint">预估视频录制时长约 {{ estimateRecordSeconds }} 秒</div>
           </div>
 
-          <!-- 2. 是否全景 -->
+          <!-- 2. 视角模式 -->
           <div class="export-field">
-            <label class="export-label">📐 视角模式（是否全景）</label>
+            <label class="export-label">📐 视角模式</label>
             <div class="export-view-cards">
               <div
+                v-for="opt in EXPORT_VIEW_OPTIONS"
+                :key="opt.mode"
                 class="export-view-card"
-                :class="{ active: exportIsOverview }"
-                @click="exportIsOverview = true"
+                :class="{ active: exportViewMode === opt.mode }"
+                @click="exportViewMode = opt.mode"
               >
-                <div class="export-view-icon-wrap icon-blue">🌐</div>
+                <div class="export-view-icon-wrap" :class="opt.iconClass">{{ opt.icon }}</div>
                 <div class="export-view-info">
                   <div class="export-view-title-row">
-                    <span class="export-view-title">全景视角</span>
-                    <span class="export-badge-tag">推荐</span>
+                    <span class="export-view-title">{{ opt.title }}</span>
+                    <span v-if="opt.recommended" class="export-badge-tag">推荐</span>
                   </div>
-                  <div class="export-view-desc">画面中完整展示全程规划路线与地理全貌</div>
-                </div>
-                <div class="export-check-dot"></div>
-              </div>
-
-              <div
-                class="export-view-card"
-                :class="{ active: !exportIsOverview }"
-                @click="exportIsOverview = false"
-              >
-                <div class="export-view-icon-wrap icon-orange">🎯</div>
-                <div class="export-view-info">
-                  <div class="export-view-title-row">
-                    <span class="export-view-title">跟随视角</span>
-                  </div>
-                  <div class="export-view-desc">镜头特写跟拍小轿车与沿途经过站点城市</div>
+                  <div class="export-view-desc">{{ opt.desc }}</div>
                 </div>
                 <div class="export-check-dot"></div>
               </div>
@@ -1548,7 +1768,7 @@ function cancelRecording() {
           <div class="export-feature-note">
             <div class="feature-item"><span>🎬</span> 新版 Chrome / Edge 导出 .mp4；其他浏览器导出 .webm</div>
             <div class="feature-item"><span>📐</span> 严格按 16:9 画幅录制并居中重采样</div>
-            <div class="feature-item"><span>🚗</span> 包含动态小轿车、车顶途经城市地点标签与高亮行车路线</div>
+            <div class="feature-item"><span>🚗</span> 包含开场标题、逐段路线、里程表、到站站牌与片尾总结</div>
             <div class="feature-item"><span>💡</span> 点击后请在浏览器共享弹窗中选择「当前标签页」开始</div>
           </div>
         </div>

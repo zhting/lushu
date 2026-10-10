@@ -253,7 +253,7 @@ function simplifyIndices(coords: [number, number][], tol: number, forced: Set<nu
 }
 
 /** 根据当前累积距离采样车辆位置、朝向角、经过城市地点及行车状态 */
-export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): CruiseState {
+export function sampleCruiseTrack(track: CruiseTrack, currentDist: number, lookaheadM = 15): CruiseState {
   const { points, totalDistance, milestones } = track
   const dist = Math.max(0, Math.min(totalDistance, currentDist))
   const progress = totalDistance > 0 ? dist / totalDistance : 0
@@ -288,9 +288,9 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
   }
 
   // 计算航向角（顺时针度数，0 为正北）
-  // 为避免短线段抖动，向前瞻探测至少 15 米或接下来的若干点计算朝向
+  // 为避免短线段抖动，向前瞻探测至少 lookaheadM 米（调用方按地图比例尺给，约 30 像素）计算朝向
   let lookaheadIdx = Math.min(points.length - 1, idx + 1)
-  while (lookaheadIdx < points.length - 1 && points[lookaheadIdx].dist - dist < 15) {
+  while (lookaheadIdx < points.length - 1 && points[lookaheadIdx].dist - dist < lookaheadM) {
     lookaheadIdx++
   }
   const targetPt = points[lookaheadIdx]
@@ -375,4 +375,168 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
     isNearStop,
     passedIdx: idx,
   }
+}
+
+// ───────────────────────── 巡游时间轴 ─────────────────────────
+// 思路借鉴 map-motion（github.com/SpaceZephyr/map-motion，MIT）的 trip 镜头：
+// 先排好一张时间表——全景开场 → 每段路单独定时长（按 √里程压缩）→ 到站停留 → 下一段 → 拉回全景收尾，
+// 每段起步加速、到站减速；播放时按「时间」求状态，拖动、倍速、录屏都能复现。
+
+export type CruisePhase = 'intro' | 'drive' | 'stay' | 'outro'
+
+export interface CruiseLeg {
+  index: number
+  from: number // milestones 下标
+  to: number
+  d0: number // 轨迹累计距离（米）
+  d1: number
+  t0: number // 1 倍速下的开始 / 结束时刻（秒）
+  t1: number
+  dayIndex: number // 到达站所属天
+}
+
+export interface CruiseStay {
+  milestone: number
+  t0: number
+  t1: number
+  dayEnd: boolean // 是否为一天的最后一站（停留稍长）
+}
+
+export interface CruiseTimeline {
+  legs: CruiseLeg[]
+  stays: CruiseStay[]
+  introEnd: number
+  outroStart: number
+  duration: number
+}
+
+export interface CruiseMoment {
+  t: number
+  dist: number
+  phase: CruisePhase
+  leg: number // 当前（或刚结束 / 即将开始的）路段下标
+  stayAt: number // 正在停留的站点（milestones 下标），否则 -1
+  phaseProgress: number // 当前阶段 0~1
+}
+
+export const TIMELINE = {
+  intro: 2.4, // 全景开场
+  outro: 3.2, // 收尾拉回全景
+  stay: 1.5, // 途经站停留
+  stayDayEnd: 2.2, // 一天结束（住宿点）停留
+  minStopGapM: 30, // 两站距离小于它视为同一处，不单独成段
+}
+
+/** 一段路的播放时长（秒，1 倍速）：短的景点段不会一闪而过，长途段也不会拖太久。5 km≈2.5s，50 km≈3.3s，500 km≈5.6s */
+export function legDuration(meters: number): number {
+  const km = Math.max(0, meters) / 1000
+  return Math.min(7, 2.2 + 2.6 * Math.sqrt(km / 300))
+}
+
+/** 段内进度：匀加速 r 秒 → 匀速 → 匀减速 r 秒（与 map-motion 的 prog() 同一写法），返回 0~1 */
+export function driveEase(u: number, T: number): number {
+  if (T <= 0) return 1
+  u = Math.max(0, Math.min(T, u))
+  const r = Math.min(0.8, T * 0.25)
+  const v = 1 / (T - r)
+  if (u < r) return (v * u * u) / (2 * r)
+  if (u > T - r) return 1 - (v * (T - u) ** 2) / (2 * r)
+  return v * (u - r / 2)
+}
+
+export function buildCruiseTimeline(track: CruiseTrack): CruiseTimeline {
+  const ms = track.milestones
+  // 合并几乎重合的相邻站点（接续节点等），只保留需要真正开过去的站
+  const keep: number[] = []
+  for (let i = 0; i < ms.length; i++) {
+    const last = keep.length ? ms[keep[keep.length - 1]] : null
+    if (last && ms[i].milestoneDist - last.milestoneDist < TIMELINE.minStopGapM) {
+      keep[keep.length - 1] = i // 用后一个（同一处，保留更晚的站名/天数）
+      continue
+    }
+    keep.push(i)
+  }
+
+  const legs: CruiseLeg[] = []
+  const stays: CruiseStay[] = []
+  let t = TIMELINE.intro
+  const introEnd = t
+
+  if (keep.length < 2) {
+    // 站点不足两个：整条轨迹当一段开
+    const T = legDuration(track.totalDistance)
+    legs.push({ index: 0, from: keep[0] ?? 0, to: keep[0] ?? 0, d0: 0, d1: track.totalDistance, t0: t, t1: t + T, dayIndex: ms[0]?.dayIndex ?? 0 })
+    t += T
+  } else {
+    for (let k = 1; k < keep.length; k++) {
+      const a = ms[keep[k - 1]]
+      const b = ms[keep[k]]
+      const d0 = k === 1 ? 0 : a.milestoneDist // 第一段从轨迹起点开
+      const d1 = k === keep.length - 1 ? track.totalDistance : b.milestoneDist // 最后一段开到轨迹终点
+      const T = legDuration(d1 - d0)
+      legs.push({ index: legs.length, from: keep[k - 1], to: keep[k], d0, d1, t0: t, t1: t + T, dayIndex: b.dayIndex })
+      t += T
+      if (k < keep.length - 1) {
+        const next = ms[keep[k + 1]]
+        const dayEnd = next.dayIndex !== b.dayIndex
+        const dur = dayEnd ? TIMELINE.stayDayEnd : TIMELINE.stay
+        stays.push({ milestone: keep[k], t0: t, t1: t + dur, dayEnd })
+        t += dur
+      }
+    }
+  }
+
+  const outroStart = t
+  return { legs, stays, introEnd, outroStart, duration: t + TIMELINE.outro }
+}
+
+/** 时间轴上 t 秒（1 倍速时间）时小车在哪、处于哪个阶段 */
+export function timelineAt(tl: CruiseTimeline, track: CruiseTrack, t: number): CruiseMoment {
+  t = Math.max(0, Math.min(tl.duration, t))
+  if (t < tl.introEnd) {
+    return { t, dist: 0, phase: 'intro', leg: 0, stayAt: -1, phaseProgress: t / tl.introEnd }
+  }
+  if (t >= tl.outroStart) {
+    const last = tl.legs[tl.legs.length - 1]
+    return {
+      t,
+      dist: track.totalDistance,
+      phase: 'outro',
+      leg: tl.legs.length - 1,
+      stayAt: last ? last.to : -1,
+      phaseProgress: (t - tl.outroStart) / Math.max(0.001, tl.duration - tl.outroStart),
+    }
+  }
+  for (let i = 0; i < tl.legs.length; i++) {
+    const L = tl.legs[i]
+    if (t < L.t1) {
+      const T = L.t1 - L.t0
+      const e = driveEase(t - L.t0, T)
+      return { t, dist: L.d0 + (L.d1 - L.d0) * e, phase: 'drive', leg: i, stayAt: -1, phaseProgress: (t - L.t0) / T }
+    }
+    const S = tl.stays[i]
+    if (S && t < S.t1) {
+      return { t, dist: L.d1, phase: 'stay', leg: i, stayAt: S.milestone, phaseProgress: (t - S.t0) / (S.t1 - S.t0) }
+    }
+  }
+  return { t, dist: track.totalDistance, phase: 'outro', leg: tl.legs.length - 1, stayAt: -1, phaseProgress: 0 }
+}
+
+/** 已行驶距离 → 时间轴时刻（拖动「按距离」的旧接口、或按里程定位时用） */
+export function timeOfDist(tl: CruiseTimeline, dist: number): number {
+  for (const L of tl.legs) {
+    if (dist <= L.d1) {
+      const T = L.t1 - L.t0
+      const target = (dist - L.d0) / Math.max(1e-6, L.d1 - L.d0)
+      let lo = 0
+      let hi = T
+      for (let k = 0; k < 30; k++) {
+        const mid = (lo + hi) / 2
+        if (driveEase(mid, T) < target) lo = mid
+        else hi = mid
+      }
+      return L.t0 + (lo + hi) / 2
+    }
+  }
+  return tl.outroStart
 }
