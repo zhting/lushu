@@ -38,7 +38,18 @@ export function getSupportedMimeType(): string {
     'video/webm;codecs=vp8',
     'video/webm',
   ]
-  return types.find((t) => MediaRecorder.isTypeSupported(t)) || 'video/mp4'
+  // 都不支持时返回空串，交给浏览器选默认格式；最终格式以 recorder.mimeType 为准
+  return types.find((t) => MediaRecorder.isTypeSupported(t)) || ''
+}
+
+/** 去掉 codecs 参数，只保留容器类型（如 video/webm） */
+function containerType(mime: string): string {
+  return (mime || '').split(';')[0].trim() || 'video/webm'
+}
+
+/** 视频 Blob 对应的文件后缀与展示名（按实际编码格式，不做伪装） */
+export function videoFormatOf(blob: Blob): { ext: 'mp4' | 'webm'; label: string } {
+  return blob.type.includes('mp4') ? { ext: 'mp4', label: 'MP4' } : { ext: 'webm', label: 'WebM' }
 }
 
 /**
@@ -136,7 +147,7 @@ export async function start16x9Recording(
   let recorder: MediaRecorder
   try {
     recorder = new MediaRecorder(canvasStream, {
-      mimeType,
+      ...(mimeType ? { mimeType } : {}),
       videoBitsPerSecond: 8_500_000, // 8.5 Mbps 超清码率
     })
   } catch {
@@ -152,9 +163,12 @@ export async function start16x9Recording(
   let stopPromiseResolve: ((blob: Blob) => void) | null = null
   let isCancelled = false
 
+  // 实际编码格式：以浏览器最终采用的 mimeType 为准（Firefox 等只能录 WebM）
+  const outputType = () => containerType(recorder.mimeType || mimeType)
+
   recorder.onstop = () => {
     if (isCancelled) return
-    const finalBlob = new Blob(chunks, { type: 'video/mp4' })
+    const finalBlob = new Blob(chunks, { type: outputType() })
     if (stopPromiseResolve) {
       stopPromiseResolve(finalBlob)
       stopPromiseResolve = null
@@ -178,7 +192,7 @@ export async function start16x9Recording(
 
   const stop = (): Promise<Blob> => {
     if (!active) {
-      return Promise.resolve(new Blob(chunks, { type: 'video/mp4' }))
+      return Promise.resolve(new Blob(chunks, { type: outputType() }))
     }
     active = false
 
@@ -223,12 +237,12 @@ export async function start16x9Recording(
   }
 }
 
-/** 触发视频文件下载（统一导出为通用 .mp4 格式） */
-export function downloadVideoBlob(blob: Blob, filename = '自驾路线巡游-16比9') {
-  const mp4Blob = blob.type.includes('mp4') ? blob : new Blob([blob], { type: 'video/mp4' })
+/** 触发视频文件下载：后缀与实际编码一致（MP4 或 WebM），避免 WebM 被改名成 .mp4 后播放器打不开 */
+export function downloadVideoBlob(blob: Blob, filename = '自驾路线巡游-16比9'): { ext: string; label: string } {
+  const fmt = videoFormatOf(blob)
   const cleanName = filename.replace(/\.(webm|mp4)$/i, '')
-  const finalName = `${cleanName}.mp4`
-  const url = URL.createObjectURL(mp4Blob)
+  const finalName = `${cleanName}.${fmt.ext}`
+  const url = URL.createObjectURL(blob)
   const a = document.createElement('a')
   a.href = url
   a.download = finalName
@@ -236,4 +250,5 @@ export function downloadVideoBlob(blob: Blob, filename = '自驾路线巡游-16�
   a.click()
   document.body.removeChild(a)
   setTimeout(() => URL.revokeObjectURL(url), 2000)
+  return fmt
 }
