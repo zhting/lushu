@@ -59,6 +59,13 @@ function mkContinuedStop(prevLast: Stop): Stop {
 function syncContinuationStops(t: Trip | null): boolean {
   if (!t || !t.days || t.days.length <= 1) return false
   let changed = false
+
+  // 第一天绝对不可能从前一天接续，若首节点误带 fromPrev 则坚决清除
+  if (t.days[0]?.stops[0]?.fromPrev) {
+    t.days[0].stops.shift()
+    changed = true
+  }
+
   for (let i = 1; i < t.days.length; i++) {
     const curr = t.days[i]
     const prev = t.days[i - 1]
@@ -437,13 +444,13 @@ export const useTripStore = defineStore('trip', () => {
       const day = days[i]
       day.departTime = sd.departTime
       const stops: Stop[] = []
-      if (i === 0 && sd.start) stops.push(mkStop(sd.start, 'waypoint'))
+      if (i === 0 && sd.start) stops.push(mkStop(sd.start, sd.start.kind ?? 'waypoint'))
       for (const wp of sd.waypoints ?? []) {
         const s = mkStop(wp, wp.kind ?? 'scenic')
         s.stayMinutes = wp.stay ?? defaultStay(s.kind)
         stops.push(s)
       }
-      if (sd.end) stops.push(mkStop(sd.end, 'hotel'))
+      if (sd.end) stops.push(mkStop(sd.end, sd.end.kind ?? 'hotel'))
       day.stops = stops
     })
     view.value = days[0].id

@@ -10,10 +10,18 @@ export const KIND_META: Record<StopKind, { label: string; emoji: string; stay: n
 
 export const KIND_OPTIONS: StopKind[] = ['waypoint', 'scenic', 'food', 'fuel', 'hotel']
 
-// 每天一条路线一种颜色
+// 每天一条路线一种颜色（精选与地图底图公路反差极大的高对比度自驾色系，杜绝与黄色/橙色底图公路撞色）
 export const DAY_COLORS = [
-  '#2563eb', '#d97706', '#059669', '#dc2626', '#7c3aed',
-  '#0891b2', '#db2777', '#65a30d', '#ea580c', '#4f46e5',
+  '#2563eb', // D1: 科技深蓝
+  '#7c3aed', // D2: 优雅紫罗兰
+  '#059669', // D3: 翡翠浓绿
+  '#e11d48', // D4: 鲜明热粉
+  '#0284c7', // D5: 清澈天青蓝
+  '#9333ea', // D6: 靓丽亮紫
+  '#0d9488', // D7: 黛青水绿
+  '#db2777', // D8: 玫瑰品红
+  '#4f46e5', // D9: 靛蓝紫
+  '#0891b2', // D10: 深湖蓝
 ]
 
 // 选点页城市下拉：默认常用热门城市
