@@ -2216,6 +2216,16 @@ button {
   animation: fadeIn 0.2s ease;
 }
 
+/* 录制中 toast 固定在底部黑边内（地图画框距底部 64px） */
+body.is-recording-video .toast {
+  bottom: 14px;
+  padding: 8px 18px;
+  max-height: 40px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
 .toast.error {
   background: var(--danger);
 }
@@ -3365,10 +3375,12 @@ button {
   cursor: none !important;
 }
 
+/* 画框上下各留 64px 黑边：顶部放录制状态条、底部放 toast 提示，两者都不会落进录制画面。
+   （浏览器视口通常比 16:9 更宽，若画框占满高度，固定在顶部 / 底部的浮层就会被录进视频） */
 .mapwrap.recording-16-9 .map {
   position: relative !important;
-  width: min(100vw, calc(100vh * 16 / 9)) !important;
-  height: min(100vh, calc(100vw * 9 / 16)) !important;
+  width: min(100vw, calc((100vh - 128px) * 16 / 9)) !important;
+  height: min(calc(100vh - 128px), calc(100vw * 9 / 16)) !important;
   max-width: 1920px;
   max-height: 1080px;
   border-radius: 0 !important;
@@ -3394,7 +3406,9 @@ button {
 /* 顶部正在录制状态浮条：置于地图 16:9 视口顶部外部黑色留白区域，保证绝不录入视频画幅内部 */
 .recording-bar-float {
   position: fixed;
-  top: 16px;
+  top: 10px;
+  max-height: 48px;
+  box-sizing: border-box;
   left: 50%;
   transform: translateX(-50%);
   z-index: 3200;

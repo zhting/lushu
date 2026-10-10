@@ -57,14 +57,16 @@ function mkContinuedStop(prevLast: Stop): Stop {
 
 /** 确保所有启用接续出发的次日，真实拥有并同步前一天最后的节点作为出发节点 */
 function syncContinuationStops(t: Trip | null): boolean {
-  if (!t || !t.days || t.days.length <= 1) return false
+  if (!t || !t.days || !t.days.length) return false
   let changed = false
 
-  // 第一天绝对不可能从前一天接续，若首节点误带 fromPrev 则坚决清除
+  // 第一天绝对不可能从前一天接续，若首节点误带 fromPrev 则坚决清除。
+  // 必须放在单天判断之前：删到只剩一天时，原第二天的接续节点也要清掉。
   if (t.days[0]?.stops[0]?.fromPrev) {
     t.days[0].stops.shift()
     changed = true
   }
+  if (t.days.length <= 1) return changed
 
   for (let i = 1; i < t.days.length; i++) {
     const curr = t.days[i]

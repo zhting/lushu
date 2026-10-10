@@ -57,6 +57,10 @@ let cruisePolylineAmap: any = null // 已行驶经过路线（暖橙红高亮覆
 
 let cruiseRafId: number | null = null
 let cruiseLastTimestamp: number | null = null
+// 已行驶路线缓冲（按当前地图库的坐标顺序存放）：顶点 0..passedBufIdx，末尾再跟一个小车当前位置。
+// 每帧只追加新驶过的顶点，不再整段重建数组。
+let passedBuf: [number, number][] = []
+let passedBufIdx = -1
 
 // ───────────────────────── 16:9 视频导出状态 ─────────────────────────
 const exportModalOpen = ref(false)
@@ -98,12 +102,20 @@ onMounted(() => {
 })
 
 onUnmounted(() => {
+  document.body.classList.remove('is-recording-video')
+  abortRecording()
   stopCruise()
+})
+
+// 录制中给 body 打标记，让全局 toast 收进画框外的黑边（见 style.css）
+watch(isRecording, (rec) => {
+  document.body.classList.toggle('is-recording-video', rec)
 })
 
 watch(
   () => store.mapCfg.provider,
   () => {
+    abortRecording('地图数据源已切换，视频录制已取消')
     stopCruise()
     if (map) destroyMap()
     tryInit()
@@ -115,6 +127,7 @@ watch(
   () => store.mapOpen,
   (open) => {
     if (!open) {
+      abortRecording('地图已关闭，视频录制已取消')
       if (cruiseActive.value) stopCruise()
       return
     }
@@ -770,6 +783,8 @@ function setViewMode(mode: 'follow' | 'overview') {
 /** 初始化地图巡游小车与已行驶高亮图层 */
 function initCruiseMapOverlays(initialState: CruiseState) {
   const allPts = cruiseTrack.value?.points ?? []
+  passedBuf = []
+  passedBufIdx = -1
   const allCoordsLeaflet = allPts.map((p) => [p.lat, p.lng] as [number, number])
   const allCoordsAmap = allPts.map((p) => [p.lng, p.lat] as [number, number])
 
@@ -1028,6 +1043,23 @@ function cruiseLoop(timestamp: number) {
   cruiseRafId = requestAnimationFrame(cruiseLoop)
 }
 
+/** 增量维护已行驶路线：前进时只追加新顶点，拖回进度时截断，末尾始终是小车当前位置 */
+function syncPassedBuffer(state: CruiseState): [number, number][] {
+  const pts = cruiseTrack.value?.points ?? []
+  const toPair = (lng: number, lat: number): [number, number] =>
+    loadedProvider === 'osm' ? [lat, lng] : [lng, lat]
+  if (passedBuf.length === passedBufIdx + 2) passedBuf.pop() // 去掉上一帧的小车位置
+  const want = Math.min(state.passedIdx, pts.length - 1)
+  if (want < passedBufIdx) {
+    passedBuf.length = want + 1
+  } else {
+    for (let i = passedBufIdx + 1; i <= want; i++) passedBuf.push(toPair(pts[i].lng, pts[i].lat))
+  }
+  passedBufIdx = want
+  passedBuf.push(toPair(state.lng, state.lat))
+  return passedBuf
+}
+
 /** 采样并同步渲染小轿车位置、旋转与车顶城市地点信息 */
 function updateCruiseFrame() {
   if (!cruiseTrack.value) return
@@ -1037,15 +1069,16 @@ function updateCruiseFrame() {
   cruiseProgressSlider.value = Math.round(state.progress * 1000)
 
   // 1. 同步小车经纬度与走过路线
+  const passed = syncPassedBuffer(state)
   if (loadedProvider === 'osm') {
     cruiseCarMarkerLeaflet?.setLatLng([state.lat, state.lng])
-    cruisePolylineLeaflet?.setLatLngs(state.passedCoords.map(([lng, lat]) => [lat, lng]))
+    cruisePolylineLeaflet?.setLatLngs(passed)
     if (cruiseViewMode.value === 'follow' && map) {
       map.panTo([state.lat, state.lng], { animate: false })
     }
   } else if (loadedProvider === 'amap') {
     cruiseCarMarkerAmap?.setPosition([state.lng, state.lat])
-    cruisePolylineAmap?.setPath(state.passedCoords)
+    cruisePolylineAmap?.setPath(passed.slice()) // 高德可能持有数组引用，传浅拷贝避免下帧修改影响其内部状态
     if (cruiseViewMode.value === 'follow' && map) {
       map.panTo([state.lng, state.lat])
     }
@@ -1095,8 +1128,12 @@ function safeTriggerVideoDownload(blob: Blob) {
 
   const title = store.trip?.title || '自驾路线'
   const viewName = exportIsOverview.value ? '全景' : '跟随'
-  downloadVideoBlob(blob, `${title}-巡游视频-16比9-${viewName}`)
-  store.notify('🎉 16:9 巡游 MP4 视频已成功导出并下载！')
+  const fmt = downloadVideoBlob(blob, `${title}-巡游视频-16比9-${viewName}`)
+  store.notify(
+    fmt.ext === 'mp4'
+      ? '🎉 16:9 巡游 MP4 视频已成功导出并下载！'
+      : '🎉 视频已导出为 WebM（当前浏览器不支持录制 MP4，如需 MP4 请用新版 Chrome / Edge）',
+  )
 }
 
 async function startExportVideo() {
@@ -1174,6 +1211,12 @@ async function startExportVideo() {
       },
     })
 
+    // 等待用户授权期间录制可能已被取消（关闭地图、切换数据源等），此时直接丢弃会话
+    if (!isRecording.value) {
+      session.cancel()
+      return
+    }
+
     activeRecordingSession = session
     recordingTimer = window.setInterval(() => {
       recordingSeconds.value++
@@ -1202,7 +1245,7 @@ async function finishRecording() {
   }
   if (!activeRecordingSession) return
 
-  store.notify('正在生成 16:9 MP4 巡游视频文件…')
+  store.notify('正在生成 16:9 巡游视频文件…')
   try {
     const session = activeRecordingSession
     activeRecordingSession = null
@@ -1219,6 +1262,20 @@ async function finishRecording() {
     isRecording.value = false
     store.notify(err?.message || '视频生成失败', 'error')
   }
+}
+
+/** 非用户主动的中止（地图关闭 / 组件卸载 / 切换数据源）：停止屏幕共享与计时，不生成文件 */
+function abortRecording(reason?: string) {
+  if (!isRecording.value && !activeRecordingSession) return
+  if (recordingTimer !== null) {
+    clearInterval(recordingTimer)
+    recordingTimer = null
+  }
+  activeRecordingSession?.cancel()
+  activeRecordingSession = null
+  isRecording.value = false
+  cruisePlaying.value = false
+  if (reason) store.notify(reason, 'error')
 }
 
 function cancelRecording() {
@@ -1420,7 +1477,7 @@ function cancelRecording() {
         </div>
 
         <div class="modal-body export-body">
-          <p class="export-subtitle">生成高清 MP4 自驾路线巡游动画视频，按照 16:9 画幅录制导出，可直接分享至各大视频平台与朋友圈。</p>
+          <p class="export-subtitle">生成高清自驾路线巡游动画视频，按照 16:9 画幅录制导出，可直接分享至各大视频平台与朋友圈。</p>
 
           <!-- 1. 速度选择 -->
           <div class="export-field">
@@ -1489,7 +1546,7 @@ function cancelRecording() {
           </div>
 
           <div class="export-feature-note">
-            <div class="feature-item"><span>🎬</span> 视频导出为通用 .mp4 格式，兼容各大播放器与社交平台</div>
+            <div class="feature-item"><span>🎬</span> 新版 Chrome / Edge 导出 .mp4；其他浏览器导出 .webm</div>
             <div class="feature-item"><span>📐</span> 严格按 16:9 画幅录制并居中重采样</div>
             <div class="feature-item"><span>🚗</span> 包含动态小轿车、车顶途经城市地点标签与高亮行车路线</div>
             <div class="feature-item"><span>💡</span> 点击后请在浏览器共享弹窗中选择「当前标签页」开始</div>

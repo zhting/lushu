@@ -15,6 +15,7 @@ export interface CruiseMilestone {
   city: string
   name: string
   milestoneDist: number // 沿路线累积距离（米）
+  dayOrder: number // 在本次巡游范围内属于第几段（用于按天限定匹配范围）
 }
 
 export interface CruiseTrack {
@@ -35,7 +36,7 @@ export interface CruiseState {
   place: string // 当前经过/前往的地点
   statusText: string // 巡游状态短语
   isNearStop: boolean
-  passedCoords: [number, number][] // 已经行驶过的坐标点（用于点亮路线）
+  passedIdx: number // 已完整驶过的最后一个轨迹点下标（地图层据此增量点亮已走路线）
 }
 
 /** 计算两经纬度点之间的球面距离（米） */
@@ -77,6 +78,7 @@ export function buildCruiseTrack(
 
   const rawPath: [number, number][] = []
   const milestones: CruiseMilestone[] = []
+  const dayBreaks: number[] = [] // 每一天在 rawPath 中的起始下标（与 milestone.dayOrder 对应）
 
   let rangeLabel = targetRange === 'all' ? '全程自驾' : ''
 
@@ -97,7 +99,8 @@ export function buildCruiseTrack(
 
     if (!dayCoords.length) return
 
-    // 如果多天拼接，并且与前一天有间隙，将当前天起点加入
+    const dayOrder = dayBreaks.length
+    dayBreaks.push(rawPath.length)
     rawPath.push(...dayCoords)
 
     // 记录站点里程碑信息
@@ -118,66 +121,70 @@ export function buildCruiseTrack(
         city: extractCity(s),
         name: s.name,
         milestoneDist: 0, // 下面根据轨迹匹配
+        dayOrder,
       })
     })
   })
 
   if (rawPath.length < 2) return null
 
-  // 坐标去重：过滤掉距离小于 1 米的连续微小抖动点
-  const dedupedCoords: [number, number][] = [rawPath[0]]
-  for (let i = 1; i < rawPath.length; i++) {
-    const prev = dedupedCoords[dedupedCoords.length - 1]
-    const curr = rawPath[i]
-    const dist = haversineM({ lng: prev[0], lat: prev[1] }, { lng: curr[0], lat: curr[1] })
-    if (dist >= 1) {
-      dedupedCoords.push(curr)
-    }
-  }
+  // 折线抽稀（Douglas-Peucker，容差 4 米）：保持道路形状，同时把每帧绘制的点数降下来。
+  // 每天的起点强制保留，便于下面按天限定站点匹配范围。
+  const forced = new Set<number>(dayBreaks)
+  for (const b of dayBreaks) if (b > 0) forced.add(b - 1)
+  const kept = simplifyIndices(rawPath, SIMPLIFY_TOLERANCE_M, forced)
 
-  if (dedupedCoords.length < 2) return null
-
-  // 构建累积距离数组
+  // 坐标去重（< 1 米的连续抖动点），并记录每个保留点来自 rawPath 的哪个下标
   const points: CruisePoint[] = []
+  const srcIdx: number[] = []
   let accDist = 0
-
-  points.push({
-    lng: dedupedCoords[0][0],
-    lat: dedupedCoords[0][1],
-    dist: 0,
-  })
-
-  for (let i = 1; i < dedupedCoords.length; i++) {
-    const prev = points[i - 1]
-    const curr = dedupedCoords[i]
-    const segDist = haversineM(prev, { lng: curr[0], lat: curr[1] })
-    accDist += segDist
-    points.push({
-      lng: curr[0],
-      lat: curr[1],
-      dist: accDist,
-    })
+  for (const ri of kept) {
+    const [lng, lat] = rawPath[ri]
+    if (points.length) {
+      const prev = points[points.length - 1]
+      const seg = haversineM(prev, { lng, lat })
+      if (seg < 1) continue
+      accDist += seg
+    }
+    points.push({ lng, lat, dist: accDist })
+    srcIdx.push(ri)
   }
 
+  if (points.length < 2) return null
   const totalDistance = accDist
   if (totalDistance <= 0) return null
 
-  // 为每个站点计算在整条折线上的最近里程点
-  milestones.forEach((m) => {
-    let bestDist = 0
+  // 每天在 points 中的下标范围 [start, end]（相邻两天共享接续点）
+  const dayStart = dayBreaks.map((b) => {
+    const i = srcIdx.findIndex((ri) => ri >= b)
+    return i < 0 ? points.length - 1 : Math.max(0, i - 1)
+  })
+  const dayEnd = dayStart.map((_, d) => (d + 1 < dayStart.length ? dayStart[d + 1] + 1 : points.length - 1))
+
+  // 按站点原有顺序沿轨迹向前匹配：每个站点只在本天范围内、上一站之后查找，
+  // 并取「误差不超过最小误差 + 30 米」的最早一点——环线、折返、原路返回都不会吸附到错误位置。
+  let cursor = 0
+  for (const m of milestones) {
+    const from = Math.max(cursor, dayStart[m.dayOrder] ?? 0)
+    const to = Math.min(points.length - 1, Math.max(from, dayEnd[m.dayOrder] ?? points.length - 1))
+    const target = { lng: m.stop.lng, lat: m.stop.lat }
+    const errs: number[] = []
     let minErr = Infinity
-    for (let i = 0; i < points.length; i++) {
-      const err = haversineM({ lng: m.stop.lng, lat: m.stop.lat }, points[i])
-      if (err < minErr) {
-        minErr = err
-        bestDist = points[i].dist
+    for (let i = from; i <= to; i++) {
+      const e = haversineM(target, points[i])
+      errs.push(e)
+      if (e < minErr) minErr = e
+    }
+    let best = from
+    for (let k = 0; k < errs.length; k++) {
+      if (errs[k] <= minErr + 30) {
+        best = from + k
+        break
       }
     }
-    m.milestoneDist = bestDist
-  })
-
-  // 按里程顺序排序 milestones
-  milestones.sort((a, b) => a.milestoneDist - b.milestoneDist)
+    m.milestoneDist = points[best].dist
+    cursor = best
+  }
 
   return {
     points,
@@ -185,6 +192,64 @@ export function buildCruiseTrack(
     milestones,
     targetLabel: rangeLabel || '自驾路线',
   }
+}
+
+const SIMPLIFY_TOLERANCE_M = 4
+const DEG = Math.PI / 180
+const EARTH_R = 6371000
+
+/** 点 p 到线段 ab 的距离（米，以 a 为原点做局部平面近似） */
+function segDistM(p: [number, number], a: [number, number], b: [number, number]): number {
+  const k = Math.cos(a[1] * DEG) * DEG * EARTH_R
+  const ky = DEG * EARTH_R
+  const bx = (b[0] - a[0]) * k
+  const by = (b[1] - a[1]) * ky
+  const px = (p[0] - a[0]) * k
+  const py = (p[1] - a[1]) * ky
+  const len2 = bx * bx + by * by
+  let t = len2 > 0 ? (px * bx + py * by) / len2 : 0
+  t = Math.max(0, Math.min(1, t))
+  const dx = px - bx * t
+  const dy = py - by * t
+  return Math.sqrt(dx * dx + dy * dy)
+}
+
+/** Douglas-Peucker 抽稀（迭代实现，避免长折线递归爆栈），返回保留的下标（升序） */
+function simplifyIndices(coords: [number, number][], tol: number, forced: Set<number>): number[] {
+  const n = coords.length
+  if (n <= 2) return coords.map((_, i) => i)
+  const keep = new Uint8Array(n)
+  keep[0] = 1
+  keep[n - 1] = 1
+  for (const f of forced) if (f >= 0 && f < n) keep[f] = 1
+
+  // 以强制保留点切分，各段分别抽稀
+  const anchors: number[] = []
+  for (let i = 0; i < n; i++) if (keep[i]) anchors.push(i)
+
+  const stack: Array<[number, number]> = []
+  for (let a = 0; a + 1 < anchors.length; a++) stack.push([anchors[a], anchors[a + 1]])
+  while (stack.length) {
+    const [s, e] = stack.pop()!
+    if (e - s < 2) continue
+    let maxD = -1
+    let maxI = -1
+    for (let i = s + 1; i < e; i++) {
+      const d = segDistM(coords[i], coords[s], coords[e])
+      if (d > maxD) {
+        maxD = d
+        maxI = i
+      }
+    }
+    if (maxD > tol) {
+      keep[maxI] = 1
+      stack.push([s, maxI], [maxI, e])
+    }
+  }
+
+  const out: number[] = []
+  for (let i = 0; i < n; i++) if (keep[i]) out.push(i)
+  return out
 }
 
 /** 根据当前累积距离采样车辆位置、朝向角、经过城市地点及行车状态 */
@@ -213,12 +278,6 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
 
   let currentLng = p0.lng
   let currentLat = p0.lat
-  const passedCoords: [number, number][] = []
-
-  // 收集之前走过的折线点
-  for (let i = 0; i <= idx; i++) {
-    passedCoords.push([points[i].lng, points[i].lat])
-  }
 
   const segLen = p1.dist - p0.dist
   let t = 0
@@ -227,9 +286,6 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
     currentLng = p0.lng + (p1.lng - p0.lng) * t
     currentLat = p0.lat + (p1.lat - p0.lat) * t
   }
-
-  // 将当前位置追加至已走过点
-  passedCoords.push([currentLng, currentLat])
 
   // 计算航向角（顺时针度数，0 为正北）
   // 为避免短线段抖动，向前瞻探测至少 15 米或接下来的若干点计算朝向
@@ -260,13 +316,13 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
   let nearestM: CruiseMilestone | null = null
   let nearestDiff = Infinity
 
-  milestones.forEach((m) => {
+  for (const m of milestones) {
     const diff = Math.abs(m.milestoneDist - dist)
     if (diff < nearestDiff) {
       nearestDiff = diff
       nearestM = m
     }
-  })
+  }
 
   // 寻找上一站和下一站
   let prevM: CruiseMilestone | null = null
@@ -317,6 +373,6 @@ export function sampleCruiseTrack(track: CruiseTrack, currentDist: number): Crui
     place,
     statusText,
     isNearStop,
-    passedCoords,
+    passedIdx: idx,
   }
 }
