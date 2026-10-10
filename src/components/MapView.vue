@@ -81,16 +81,6 @@ let lastArrivedAt = -1 // 上一次弹出站牌的站点（避免每帧重复触
 let lastPosKey = '' // 上一帧小车位置（没变就不重设折线）
 
 // ───────────────────────── 16:9 视频导出状态 ─────────────────────────
-const exportModalOpen = ref(false)
-const exportSpeed = ref<number>(1) // 默认 1 倍速 (1x, 2x, 4x, 8x)
-const exportViewMode = ref<CruiseViewMode>('leg') // 导出视频的视角（默认推荐分段取景）
-const EXPORT_VIEW_OPTIONS: Array<{ mode: CruiseViewMode; icon: string; iconClass: string; title: string; desc: string; recommended?: boolean }> = [
-  { mode: 'leg', icon: '🎬', iconClass: 'icon-blue', title: '分段取景', desc: '每段路单独框住，到站后镜头飞向下一段', recommended: true },
-  { mode: 'follow', icon: '🎯', iconClass: 'icon-orange', title: '跟随视角', desc: '镜头平滑跟拍小轿车，看清沿途道路' },
-  { mode: 'overview', icon: '🌐', iconClass: 'icon-blue', title: '全景视角', desc: '全程固定一个画面，完整展示路线全貌' },
-]
-const exportRange = ref<string>('all') // 'all' 或 dayId
-
 const isRecording = ref(false)
 const recordingSeconds = ref(0)
 let recordingTimer: number | null = null
@@ -153,13 +143,6 @@ const cruiseHud = computed(() => {
     caption,
     odometer: m.phase === 'intro' ? null : { value: fmtKm(m.dist, total), total: totalText },
   }
-})
-
-const estimateRecordSeconds = computed(() => {
-  if (!store.trip) return 20
-  const track = buildCruiseTrack(store.trip, exportRange.value, store.legPaths, store.routePointsOf)
-  if (!track) return 20
-  return Math.round(buildCruiseTimeline(track).duration / exportSpeed.value)
 })
 
 /** 容器当前是否可见（移动端地图收起时宽度为 0，此时不初始化/不绘制） */
@@ -231,7 +214,12 @@ async function ensureMap() {
   try {
     lib = await loadMapLib(store.mapCfg.key, store.mapCfg.securityJsCode)
     if (provider === 'amap') {
-      map = new lib.Map(el.value!, { zoom: 5, center: [104.5, 37.5], viewMode: '2D' })
+      map = new lib.Map(el.value!, {
+        zoom: 5,
+        center: [104.5, 37.5],
+        viewMode: '2D',
+        WebGLParams: { preserveDrawingBuffer: true },
+      })
       infoWindow = new lib.InfoWindow({ offset: new lib.Pixel(0, -30) })
       map.on('click', onMapClickAmap)
     } else {
@@ -239,6 +227,7 @@ async function ensureMap() {
       lib
         .tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
           maxZoom: 19,
+          crossOrigin: 'anonymous',
           attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
         })
         .addTo(map)
@@ -379,9 +368,10 @@ function dayMarks(trip: Trip, dayId: string): Mark[] {
   }))
 }
 
-/** 总览视角：把每一天地点用数字标在地图路径上 */
+/** 总览视角：按行程地点从 1 开始一直连续累加标记在地图路径上 */
 function globalMarks(trip: Trip): Mark[] {
   const marks: Mark[] = []
+  let seqNo = 0
 
   trip.days.forEach((day, di) => {
     const color = DAY_COLORS[di % DAY_COLORS.length]
@@ -396,19 +386,19 @@ function globalMarks(trip: Trip): Mark[] {
             ? `${lastMark.dayLabel.split(/[/~]/)[0]}~D${di + 1}`
             : `${lastMark.dayLabel}/D${di + 1}`
           lastMark.dayLabel = daysPart
-          lastMark.numText = `${lastMark.stopIndex}/${si + 1}`
           lastMark.jointDesc = `第${lastMark.dayIndex + 1}天终点 ➔ 第${di + 1}天接续出发`
           return
         }
       }
 
+      seqNo += 1
       marks.push({
         s,
         color,
         dayIndex: di,
         dayLabel: `D${di + 1}`,
-        stopIndex: si + 1,
-        numText: String(si + 1),
+        stopIndex: seqNo,
+        numText: String(seqNo),
         name: s.name,
       })
     })
@@ -427,15 +417,15 @@ function redraw() {
   else if (loadedProvider === 'osm') redrawLeaflet()
 }
 
-function redrawAmap() {
+function redrawAmap(targetView = store.view, fitView = true) {
   const AMap = lib
   map.clearMap()
   const trip = store.trip
   if (!trip) return
 
-  const days = store.view === 'overview' ? trip.days : trip.days.filter((d) => d.id === store.view)
+  const days = targetView === 'overview' ? trip.days : trip.days.filter((d) => d.id === targetView)
   overlays = []
-  const dayView = store.view !== 'overview'
+  const dayView = targetView !== 'overview'
 
   for (const day of days) {
     const idx = trip.days.indexOf(day)
@@ -478,7 +468,7 @@ function redrawAmap() {
     }
   }
 
-  const marks = store.view === 'overview' ? globalMarks(trip) : dayMarks(trip, store.view)
+  const marks = targetView === 'overview' ? globalMarks(trip) : dayMarks(trip, targetView)
   for (const m of marks) {
     const marker = new AMap.Marker({
       position: [m.s.lng, m.s.lat],
@@ -495,16 +485,16 @@ function redrawAmap() {
   }
 
   drawPickerMarkers()
-  if (overlays.length) map.setFitView(overlays, false, [70, 90, 70, 90], 15)
+  if (fitView && overlays.length) map.setFitView(overlays, false, [70, 90, 70, 90], 15)
 }
 
-function redrawLeaflet() {
+function redrawLeaflet(targetView = store.view, fitView = true) {
   layerGroup.clearLayers()
   const trip = store.trip
   if (!trip) return
 
-  const days = store.view === 'overview' ? trip.days : trip.days.filter((d) => d.id === store.view)
-  const dayView = store.view !== 'overview'
+  const days = targetView === 'overview' ? trip.days : trip.days.filter((d) => d.id === targetView)
+  const dayView = targetView !== 'overview'
   const bounds: [number, number][] = []
 
   for (const day of days) {
@@ -545,7 +535,7 @@ function redrawLeaflet() {
     }
   }
 
-  const marks = store.view === 'overview' ? globalMarks(trip) : dayMarks(trip, store.view)
+  const marks = targetView === 'overview' ? globalMarks(trip) : dayMarks(trip, targetView)
   for (const m of marks) {
     const icon = lib.divIcon({
       className: '',
@@ -559,8 +549,10 @@ function redrawLeaflet() {
   }
 
   drawPickerMarkers()
-  if (bounds.length === 1) map.setView(bounds[0], 13)
-  else if (bounds.length) map.fitBounds(lib.latLngBounds(bounds), { padding: [70, 90], maxZoom: 15, animate: false })
+  if (fitView) {
+    if (bounds.length === 1) map.setView(bounds[0], 13)
+    else if (bounds.length) map.fitBounds(lib.latLngBounds(bounds), { padding: [70, 90], maxZoom: 15, animate: false })
+  }
 }
 
 /** 选点页：把搜索结果画成可点击的编号标记 */
@@ -771,6 +763,10 @@ function prepareCruise(range: string): boolean {
     cancelAnimationFrame(cruiseRafId)
     cruiseRafId = null
   }
+  const viewKey = range === 'all' ? 'overview' : range
+  if (loadedProvider === 'amap') redrawAmap(viewKey, false)
+  else if (loadedProvider === 'osm') redrawLeaflet(viewKey, false)
+
   cruiseTrack.value = track
   cruiseTimeline.value = buildCruiseTimeline(track)
   // 巡游期间允许 Leaflet 1/4 级缩放，整段 / 全程取景能把路线放到合适大小（退出时恢复整数级）
@@ -933,6 +929,9 @@ function renderCruiseAt(t: number, opts: { instant?: boolean; dtReal?: number; c
 
   // 4. 镜头
   applyCruiseCamera(m, state, dtReal, opts)
+
+  // 5. 若正在导出视频，同步渲染当前帧至录制画布
+  activeRecordingSession?.renderNow()
 }
 
 /** 车顶站牌：到站时弹出「DAY n · 第 k 站 / 地名」，并在车下放一圈涟漪 */
@@ -1326,17 +1325,363 @@ function stopCruise() {
   redraw()
 }
 
-// ───────────────────────── 16:9 巡游视频录制与导出 ─────────────────────────
+// ───────────────────────── 16:9 巡游视频直接录制与导出（零弹窗） ─────────────────────────
 
-function openExportModal() {
-  if (!store.trip) {
-    store.notify('请先打开或创建一份路书', 'error')
-    return
+const CAR_SVG_DATA_URI =
+  'data:image/svg+xml;utf8,' +
+  encodeURIComponent(`<svg viewBox="0 0 48 72" width="48" height="72" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="cuteCarBodyGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+        <stop offset="0%" stop-color="#f59e0b" />
+        <stop offset="35%" stop-color="#fbbf24" />
+        <stop offset="70%" stop-color="#fde047" />
+        <stop offset="100%" stop-color="#d97706" />
+      </linearGradient>
+      <linearGradient id="cuteGlassGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+        <stop offset="0%" stop-color="#7dd3fc" stop-opacity="0.95" />
+        <stop offset="100%" stop-color="#0284c7" stop-opacity="0.85" />
+      </linearGradient>
+    </defs>
+    <polygon points="12.5,0 3,13 17,13" fill="rgba(254, 240, 138, 0.45)" />
+    <polygon points="35.5,0 31,13 45,13" fill="rgba(254, 240, 138, 0.45)" />
+    <rect x="1" y="13" width="6.5" height="13" rx="3.25" fill="#1e293b" />
+    <rect x="40.5" y="13" width="6.5" height="13" rx="3.25" fill="#1e293b" />
+    <rect x="1" y="46" width="6.5" height="13" rx="3.25" fill="#1e293b" />
+    <rect x="40.5" y="46" width="6.5" height="13" rx="3.25" fill="#1e293b" />
+    <ellipse cx="3.8" cy="25.5" rx="2.8" ry="3.2" fill="#f59e0b" />
+    <ellipse cx="44.2" cy="25.5" rx="2.8" ry="3.2" fill="#f59e0b" />
+    <rect x="6.5" y="7" width="35" height="58" rx="17.5" ry="17.5" fill="url(#cuteCarBodyGrad)" stroke="#d97706" stroke-width="1.2" />
+    <path d="M 11.5 20.5 Q 24 17.5, 36.5 20.5 Q 38.5 30, 34.5 32 Q 24 30.5, 13.5 32 Q 9.5 30, 11.5 20.5 Z" fill="url(#cuteGlassGrad)" />
+    <rect x="13.5" y="34.5" width="21" height="17" rx="6" fill="#0f172a" opacity="0.85" />
+    <path d="M 16 37.5 L 21 37.5 L 18 48.5 L 15 48.5 Z" fill="#ffffff" opacity="0.28" />
+    <path d="M 13.5 53.5 Q 24 52.5, 34.5 53.5 Q 36.5 58.5, 33 59.5 Q 24 60.5, 15 59.5 Q 11.5 58.5, 13.5 53.5 Z" fill="url(#cuteGlassGrad)" />
+    <circle cx="12.5" cy="11.5" r="4.2" fill="#fef08a" stroke="#d97706" stroke-width="0.8" />
+    <circle cx="11.5" cy="10.5" r="1.6" fill="#ffffff" />
+    <circle cx="35.5" cy="11.5" r="4.2" fill="#fef08a" stroke="#d97706" stroke-width="0.8" />
+    <circle cx="34.5" cy="10.5" r="1.6" fill="#ffffff" />
+    <path d="M 21 12.5 Q 24 14.8, 27 12.5" stroke="#d97706" stroke-width="1.3" stroke-linecap="round" fill="none" />
+    <circle cx="17.5" cy="13.5" r="1.4" fill="#fb7185" opacity="0.75" />
+    <circle cx="30.5" cy="13.5" r="1.4" fill="#fb7185" opacity="0.75" />
+    <ellipse cx="12.5" cy="63.5" rx="2.8" ry="2" fill="#ef4444" />
+    <ellipse cx="35.5" cy="63.5" rx="2.8" ry="2" fill="#ef4444" />
+  </svg>`)
+
+let carImageObj: HTMLImageElement | null = null
+function getCarImage(): HTMLImageElement {
+  if (!carImageObj) {
+    carImageObj = new Image()
+    carImageObj.src = CAR_SVG_DATA_URI
   }
-  exportSpeed.value = cruiseSpeed.value || 1
-  exportViewMode.value = cruiseViewMode.value
-  exportRange.value = cruiseRange.value || 'all'
-  exportModalOpen.value = true
+  return carImageObj
+}
+
+function drawRoundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, r: number) {
+  const rad = Math.min(r, w / 2, h / 2)
+  ctx.beginPath()
+  ctx.moveTo(x + rad, y)
+  ctx.arcTo(x + w, y, x + w, y + h, rad)
+  ctx.arcTo(x + w, y + h, x, y + h, rad)
+  ctx.arcTo(x, y + h, x, y, rad)
+  ctx.arcTo(x, y, x + w, y, rad)
+  ctx.closePath()
+}
+
+/** 将经纬度投影为当前地图容器像素坐标 */
+function projectLngLat(lng: number, lat: number): [number, number] | null {
+  if (!map) return null
+  try {
+    if (loadedProvider === 'osm') {
+      const p = map.latLngToContainerPoint([lat, lng])
+      return [p.x, p.y]
+    } else if (loadedProvider === 'amap') {
+      const p = map.lngLatToContainer([lng, lat])
+      return [p.getX(), p.getY()]
+    }
+  } catch {}
+  return null
+}
+
+/** 将当前巡游地图帧（底图瓦片 + 规划线 + 已行驶线 + 地点数字圆圈 + 萌萌小车 + 车顶气泡 + HUD）绘制到 16:9 录制 Canvas */
+function renderCruiseToCanvas(ctx: CanvasRenderingContext2D, outW: number, outH: number) {
+  const mapEl = el.value
+  const trip = store.trip
+  const track = cruiseTrack.value
+  const state = cruiseCurrentState.value
+  const m = cruiseMoment.value
+  if (!mapEl || !map || !trip || !track || !state) return
+
+  const mapRect = mapEl.getBoundingClientRect()
+  const mw = mapRect.width || 960
+  const mh = mapRect.height || 540
+
+  ctx.save()
+  ctx.fillStyle = '#e2e8f0'
+  ctx.fillRect(0, 0, outW, outH)
+
+  const scaleX = outW / mw
+  const scaleY = outH / mh
+  ctx.scale(scaleX, scaleY)
+
+  // 1. 绘制地图底图瓦片 / WebGL 画布
+  if (loadedProvider === 'osm') {
+    const tiles = mapEl.querySelectorAll('img.leaflet-tile')
+    tiles.forEach((node) => {
+      const img = node as HTMLImageElement
+      if (!img.complete || img.naturalWidth === 0) return
+      const r = img.getBoundingClientRect()
+      const dx = r.left - mapRect.left
+      const dy = r.top - mapRect.top
+      if (r.width > 0 && r.height > 0) {
+        try {
+          ctx.drawImage(img, dx, dy, r.width, r.height)
+        } catch {}
+      }
+    })
+  } else if (loadedProvider === 'amap') {
+    const canvases = mapEl.querySelectorAll('canvas')
+    canvases.forEach((c) => {
+      const r = c.getBoundingClientRect()
+      if (r.width > 0 && r.height > 0) {
+        try {
+          ctx.drawImage(c, r.left - mapRect.left, r.top - mapRect.top, r.width, r.height)
+        } catch {}
+      }
+    })
+  }
+
+  // 2. 绘制完整规划路线（白边 + 科技深蓝主线）
+  const allPts = track.points
+  if (allPts.length > 1) {
+    ctx.beginPath()
+    let started = false
+    for (let i = 0; i < allPts.length; i++) {
+      const pt = projectLngLat(allPts[i].lng, allPts[i].lat)
+      if (!pt) continue
+      if (!started) {
+        ctx.moveTo(pt[0], pt[1])
+        started = true
+      } else {
+        ctx.lineTo(pt[0], pt[1])
+      }
+    }
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.96)'
+    ctx.lineWidth = 10
+    ctx.stroke()
+    ctx.strokeStyle = 'rgba(37, 99, 235, 0.92)'
+    ctx.lineWidth = 6.5
+    ctx.stroke()
+  }
+
+  // 3. 绘制已行驶路线（暖橙红高亮）
+  const endIdx = Math.min(state.passedIdx, allPts.length - 1)
+  if (endIdx >= 0) {
+    ctx.beginPath()
+    let started = false
+    for (let i = 0; i <= endIdx; i++) {
+      const pt = projectLngLat(allPts[i].lng, allPts[i].lat)
+      if (!pt) continue
+      if (!started) {
+        ctx.moveTo(pt[0], pt[1])
+        started = true
+      } else {
+        ctx.lineTo(pt[0], pt[1])
+      }
+    }
+    const carPt = projectLngLat(state.lng, state.lat)
+    if (carPt) {
+      if (!started) ctx.moveTo(carPt[0], carPt[1])
+      else ctx.lineTo(carPt[0], carPt[1])
+    }
+    ctx.lineCap = 'round'
+    ctx.lineJoin = 'round'
+    ctx.strokeStyle = '#ff5722'
+    ctx.lineWidth = 7
+    ctx.stroke()
+  }
+
+  // 4. 绘制地点圆圈累加数字标记与地名胶囊
+  const viewKey = cruiseRange.value === 'all' ? 'overview' : cruiseRange.value
+  const marks = viewKey === 'overview' ? globalMarks(trip) : dayMarks(trip, viewKey)
+  ctx.textBaseline = 'middle'
+  for (const mk of marks) {
+    const pt = projectLngLat(mk.s.lng, mk.s.lat)
+    if (!pt) continue
+    const [x, y] = pt
+
+    // 右侧地名胶囊标签
+    ctx.font = '700 11.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+    const labelText = mk.name.length > 10 ? mk.name.slice(0, 9) + '…' : mk.name
+    const tw = ctx.measureText(labelText).width
+    const tagX = x + 18
+    const tagY = y - 11
+    const tagW = tw + 14
+    const tagH = 22
+    drawRoundRect(ctx, tagX, tagY, tagW, tagH, 6)
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.94)'
+    ctx.fill()
+    ctx.strokeStyle = 'rgba(0, 0, 0, 0.1)'
+    ctx.lineWidth = 1
+    ctx.stroke()
+    ctx.fillStyle = '#1e293b'
+    ctx.textAlign = 'left'
+    ctx.fillText(labelText, tagX + 7, y)
+
+    // 彩色圆圈
+    ctx.beginPath()
+    ctx.arc(x, y, 14, 0, Math.PI * 2)
+    ctx.fillStyle = mk.color
+    ctx.fill()
+    ctx.lineWidth = 2.5
+    ctx.strokeStyle = '#ffffff'
+    ctx.stroke()
+
+    // 圆圈内累加数字
+    ctx.fillStyle = '#ffffff'
+    ctx.font = '900 13px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+    ctx.textAlign = 'center'
+    ctx.fillText(mk.numText, x, y + 0.5)
+
+    // 左上角天数徽标 (D1 / D1/D2)
+    ctx.font = '800 9px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+    const dw = ctx.measureText(mk.dayLabel).width + 8
+    const dx = x - 14 - dw * 0.35
+    const dy = y - 21
+    drawRoundRect(ctx, dx, dy, dw, 14, 7)
+    ctx.fillStyle = '#0f172a'
+    ctx.fill()
+    ctx.lineWidth = 1.2
+    ctx.strokeStyle = '#ffffff'
+    ctx.stroke()
+    ctx.fillStyle = '#ffffff'
+    ctx.fillText(mk.dayLabel, dx + dw / 2, dy + 7.5)
+  }
+
+  // 5. 绘制萌萌小轿车与车顶到站气泡
+  const carPt = projectLngLat(state.lng, state.lat)
+  if (carPt) {
+    const [cx, cy] = carPt
+    const heading = smoothHeading ?? state.heading
+
+    // 到站涟漪
+    if (m && (m.phase === 'stay' || m.phase === 'intro')) {
+      const r = 22 + (m.phaseProgress % 1) * 28
+      ctx.beginPath()
+      ctx.arc(cx, cy, r, 0, Math.PI * 2)
+      ctx.strokeStyle = `rgba(255, 87, 34, ${Math.max(0, 0.75 * (1 - (m.phaseProgress % 1)))})`
+      ctx.lineWidth = 3
+      ctx.stroke()
+    }
+
+    // 旋转小轿车
+    const carImg = getCarImage()
+    if (carImg.complete && carImg.naturalWidth > 0) {
+      ctx.save()
+      ctx.translate(cx, cy)
+      ctx.rotate((heading * Math.PI) / 180)
+      ctx.drawImage(carImg, -22, -33, 44, 66)
+      ctx.restore()
+    }
+
+    // 车顶气泡（仅在开场或到站停留时显示）
+    let mi = -1
+    if (m?.phase === 'stay') mi = m.stayAt
+    else if (m?.phase === 'intro') mi = 0
+    const ms = mi >= 0 ? track.milestones[mi] : null
+    if (ms) {
+      const badgeText = m?.phase === 'intro' ? '出发' : `D${ms.dayIndex + 1} · 第${ms.stopIndex}站`
+      const placeText = ms.name.length > 14 ? ms.name.slice(0, 13) + '…' : ms.name
+      ctx.font = '700 13.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      const pw = Math.max(130, ctx.measureText(placeText).width + 28)
+      const ph = 52
+      const bx = cx - pw / 2
+      const by = cy - 42 - ph
+
+      drawRoundRect(ctx, bx, by, pw, ph, 12)
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.94)'
+      ctx.fill()
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)'
+      ctx.lineWidth = 1
+      ctx.stroke()
+
+      ctx.fillStyle = '#38bdf8'
+      ctx.font = '700 11px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.textAlign = 'center'
+      ctx.fillText(`${badgeText}  ${ms.city || ''}`.trim(), cx, by + 16)
+
+      ctx.fillStyle = '#ffffff'
+      ctx.font = '700 13.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(placeText, cx, by + 36)
+    }
+  }
+
+  // 6. 绘制巡游 HUD（左上路段卡、右上里程表、开场/片尾标题卡）
+  const hud = cruiseHud.value
+  if (hud) {
+    if (hud.caption) {
+      ctx.font = '800 18px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      const w1 = ctx.measureText(hud.caption.text).width
+      ctx.font = '700 12.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      const w2 = ctx.measureText(hud.caption.sub).width
+      const cw = Math.min(mw * 0.6, Math.max(w1, w2) + 32)
+      const ch = 58
+      drawRoundRect(ctx, 16, 16, cw, ch, 14)
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.86)'
+      ctx.fill()
+      ctx.textAlign = 'left'
+      ctx.fillStyle = '#ffffff'
+      ctx.font = '800 18px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(hud.caption.text, 32, 36)
+      ctx.fillStyle = '#fdba74'
+      ctx.font = '700 12.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(hud.caption.sub, 32, 57)
+    }
+
+    if (hud.odometer) {
+      const ow = 148
+      const oh = 72
+      const ox = mw - 16 - ow
+      const oy = 16
+      drawRoundRect(ctx, ox, oy, ow, oh, 14)
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.86)'
+      ctx.fill()
+      ctx.textAlign = 'right'
+      ctx.fillStyle = '#cbd5e1'
+      ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText('已行驶', ox + ow - 16, oy + 16)
+      ctx.fillStyle = '#ffffff'
+      ctx.font = 'italic 800 28px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(`${hud.odometer.value} KM`, ox + ow - 16, oy + 41)
+      ctx.fillStyle = '#cbd5e1'
+      ctx.font = '600 11.5px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(`全程 ${hud.odometer.total}`, ox + ow - 16, oy + 61)
+    }
+
+    const card = hud.intro || hud.outro
+    if (card) {
+      ctx.font = '900 30px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      const tw1 = ctx.measureText(card.text).width
+      ctx.font = '700 15px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      const tw2 = ctx.measureText(card.sub).width
+      const bw = Math.min(mw - 48, Math.max(tw1, tw2) + 56)
+      const bh = 82
+      const bx = (mw - bw) / 2
+      const by = mh * 0.15
+      drawRoundRect(ctx, bx, by, bw, bh, 18)
+      ctx.fillStyle = 'rgba(15, 23, 42, 0.86)'
+      ctx.fill()
+      ctx.textAlign = 'center'
+      ctx.fillStyle = '#ffffff'
+      ctx.font = '900 30px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(card.text, mw / 2, by + 32)
+      ctx.fillStyle = '#fdba74'
+      ctx.font = '700 15px -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif'
+      ctx.fillText(card.sub, mw / 2, by + 62)
+    }
+  }
+
+  ctx.restore()
 }
 
 let hasTriggeredDownload = false
@@ -1346,31 +1691,35 @@ function safeTriggerVideoDownload(blob: Blob) {
   hasTriggeredDownload = true
 
   const title = store.trip?.title || '自驾路线'
-  const viewName = { leg: '分段', follow: '跟随', overview: '全景' }[exportViewMode.value]
-  const fmt = downloadVideoBlob(blob, `${title}-巡游视频-16比9-${viewName}`)
+  const fmt = downloadVideoBlob(blob, `${title}-巡游视频`)
   store.notify(
     fmt.ext === 'mp4'
-      ? '🎉 16:9 巡游 MP4 视频已成功导出并下载！'
-      : '🎉 视频已导出为 WebM（当前浏览器不支持录制 MP4，如需 MP4 请用新版 Chrome / Edge）',
+      ? '🎉 巡游 MP4 视频已成功导出并下载！'
+      : '🎉 巡游视频已成功导出并下载！',
   )
 }
 
+/** 点击「导出视频」按钮：零弹窗直接把巡游过程录制并导出下载 */
 async function startExportVideo() {
-  if (!store.trip) return
+  if (!store.trip) {
+    store.notify('请先打开或创建一份路书', 'error')
+    return
+  }
   if (!isVideoRecordingSupported()) {
-    store.notify('当前浏览器不支持屏幕视频录制，建议使用 Chrome 或 Edge 浏览器', 'error')
+    store.notify('当前浏览器不支持视频录制导出，建议使用 Chrome 或 Edge 浏览器', 'error')
     return
   }
 
-  exportModalOpen.value = false
   hasTriggeredDownload = false
+  getCarImage()
 
-  // 1. 应用用户选定的参数（速度、视角、天数范围）
-  cruiseSpeed.value = exportSpeed.value
-  cruiseViewMode.value = exportViewMode.value
-  cruiseRange.value = exportRange.value
+  // 若当前尚未处于巡游模式，按当前视图自动选定范围与默认速度/视角；若已在巡游则沿用当前设置
+  if (!cruiseActive.value) {
+    cruiseSpeed.value = 1
+    cruiseViewMode.value = 'leg'
+    cruiseRange.value = store.view && store.view !== 'overview' ? store.view : 'all'
+  }
 
-  // 2. 先进入 16:9 纯净录制画框（尺寸变了，取景要按新尺寸算），再铺轨迹、定位到开场画面
   isRecording.value = true
   recordingSeconds.value = 0
   await nextTick()
@@ -1385,28 +1734,19 @@ async function startExportVideo() {
     return
   }
 
-  // 延时等待地图瓦片和布局渲染平稳
-  await new Promise((r) => setTimeout(r, 260))
+  // 稍作等待让开场地图瓦片稳定后立即开始直接录制
+  await new Promise((r) => setTimeout(r, 300))
+  if (!isRecording.value) return
 
   try {
-    store.notify('请在浏览器弹出窗口中选择「此标签页」开始 16:9 视频录制')
-    const targetMapEl = el.value!
+    store.notify('🎬 正在录制导出巡游视频，播放完成后将自动下载…')
     const session = await start16x9Recording({
-      targetElement: targetMapEl,
       width: 1920,
       height: 1080,
       fps: 30,
-      onAutoStop: (blob) => {
-        if (isRecording.value) {
-          isRecording.value = false
-          activeRecordingSession = null
-          if (recordingTimer) clearInterval(recordingTimer)
-          safeTriggerVideoDownload(blob)
-        }
-      },
+      onRenderFrame: renderCruiseToCanvas,
     })
 
-    // 等待用户授权期间录制可能已被取消（关闭地图、切换数据源等），此时直接丢弃会话
     if (!isRecording.value) {
       session.cancel()
       return
@@ -1417,7 +1757,6 @@ async function startExportVideo() {
       recordingSeconds.value++
     }, 1000)
 
-    // 授权弹窗期间瓦片已加载好：从开场画面重新定位后开始播放
     camKey = ''
     lastArrivedAt = -1
     renderCruiseAt(0, { instant: true })
@@ -1425,7 +1764,7 @@ async function startExportVideo() {
   } catch (err: any) {
     isRecording.value = false
     activeRecordingSession = null
-    store.notify(err?.message || '屏幕录制启动失败', 'error')
+    store.notify(err?.message || '视频录制启动失败', 'error')
     void nextTick(() => {
       if (loadedProvider === 'osm' && map) map.invalidateSize()
       redraw()
@@ -1440,7 +1779,7 @@ async function finishRecording() {
   }
   if (!activeRecordingSession) return
 
-  store.notify('正在生成 16:9 巡游视频文件…')
+  store.notify('正在生成巡游视频文件…')
   try {
     const session = activeRecordingSession
     activeRecordingSession = null
@@ -1459,7 +1798,7 @@ async function finishRecording() {
   }
 }
 
-/** 非用户主动的中止（地图关闭 / 组件卸载 / 切换数据源）：停止屏幕共享与计时，不生成文件 */
+/** 非用户主动的中止（地图关闭 / 组件卸载 / 切换数据源）：停止录制与计时，不生成文件 */
 function abortRecording(reason?: string) {
   if (!isRecording.value && !activeRecordingSession) return
   if (recordingTimer !== null) {
@@ -1488,7 +1827,7 @@ function cancelRecording() {
     if (loadedProvider === 'osm' && map) map.invalidateSize()
     redraw()
   })
-  store.notify('已取消视频录制')
+  store.notify('已取消视频导出')
 }
 </script>
 
@@ -1531,8 +1870,8 @@ function cancelRecording() {
     <div v-if="!store.pickerOpen && !isRecording" class="map-top-bar">
       <button
         class="btn map-cruise-btn btn-export-entry"
-        title="配置并导出 16:9 巡游视频"
-        @click="openExportModal"
+        title="直接导出巡游过程视频"
+        @click="startExportVideo"
       >
         🎬 导出视频
       </button>
@@ -1557,7 +1896,7 @@ function cancelRecording() {
     <div v-if="isRecording" class="recording-bar-float">
       <div class="recording-pulse-dot"></div>
       <div class="recording-bar-text">
-        <span class="recording-bold">16:9 录制中</span>
+        <span class="recording-bold">正在导出视频</span>
         <span class="recording-time">{{ recordingSeconds }}s</span>
         <span class="recording-status">{{ cruiseCurrentState?.city || '途经城市' }} · {{ cruiseCurrentState?.place || '自驾沿途' }}</span>
       </div>
@@ -1711,8 +2050,8 @@ function cancelRecording() {
             <!-- 导出视频按钮 -->
             <button
               class="cruise-action-btn cruise-export-btn"
-              title="配置并导出 16:9 巡游视频"
-              @click="openExportModal"
+              title="直接导出巡游过程视频"
+              @click="startExportVideo"
             >
               🎬
             </button>
@@ -1740,90 +2079,6 @@ function cancelRecording() {
               ✕
             </button>
           </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 导出 16:9 巡游视频配置弹窗 -->
-    <div v-if="exportModalOpen" class="modal-backdrop" @click="exportModalOpen = false">
-      <div class="modal-card export-video-modal" @click.stop>
-        <div class="modal-head">
-          <div class="modal-title-row">
-            <span class="modal-icon">🎬</span>
-            <h3>导出 16:9 巡游视频</h3>
-          </div>
-          <button class="modal-close-btn" @click="exportModalOpen = false" title="关闭">✕</button>
-        </div>
-
-        <div class="modal-body export-body">
-          <p class="export-subtitle">生成高清自驾路线巡游动画视频，按照 16:9 画幅录制导出，可直接分享至各大视频平台与朋友圈。</p>
-
-          <!-- 1. 速度选择 -->
-          <div class="export-field">
-            <label class="export-label">⏱️ 播放速度</label>
-            <div class="export-pill-group">
-              <button
-                v-for="s in [1, 2, 4, 8]"
-                :key="s"
-                class="export-pill-btn"
-                :class="{ active: exportSpeed === s }"
-                @click="exportSpeed = s"
-              >
-                <span class="speed-text">{{ s }}x</span>
-                <span v-if="s === 1" class="speed-sub-tag">默认</span>
-              </button>
-            </div>
-            <div class="export-hint">预估视频录制时长约 {{ estimateRecordSeconds }} 秒</div>
-          </div>
-
-          <!-- 2. 视角模式 -->
-          <div class="export-field">
-            <label class="export-label">📐 视角模式</label>
-            <div class="export-view-cards">
-              <div
-                v-for="opt in EXPORT_VIEW_OPTIONS"
-                :key="opt.mode"
-                class="export-view-card"
-                :class="{ active: exportViewMode === opt.mode }"
-                @click="exportViewMode = opt.mode"
-              >
-                <div class="export-view-icon-wrap" :class="opt.iconClass">{{ opt.icon }}</div>
-                <div class="export-view-info">
-                  <div class="export-view-title-row">
-                    <span class="export-view-title">{{ opt.title }}</span>
-                    <span v-if="opt.recommended" class="export-badge-tag">推荐</span>
-                  </div>
-                  <div class="export-view-desc">{{ opt.desc }}</div>
-                </div>
-                <div class="export-check-dot"></div>
-              </div>
-            </div>
-          </div>
-
-          <!-- 3. 路线范围（多天时） -->
-          <div v-if="store.trip && store.trip.days.length > 1" class="export-field">
-            <label class="export-label">🗺️ 路线范围</label>
-            <select v-model="exportRange" class="export-select">
-              <option value="all">全程自驾路线</option>
-              <option v-for="(d, i) in store.trip.days" :key="d.id" :value="d.id">
-                第 {{ i + 1 }} 天自驾路线
-              </option>
-            </select>
-          </div>
-
-          <div class="export-feature-note">
-            <div class="feature-item"><span>🎬</span> 新版 Chrome / Edge 导出 .mp4；其他浏览器导出 .webm</div>
-            <div class="feature-item"><span>📐</span> 严格按 16:9 画幅录制并居中重采样</div>
-            <div class="feature-item"><span>🚗</span> 包含开场标题、逐段路线、里程表、到站站牌与片尾总结</div>
-            <div class="feature-item"><span>💡</span> 点击后请在浏览器共享弹窗中选择「当前标签页」开始</div>
-          </div>
-        </div>
-
-        <div class="modal-foot">
-          <button class="btn btn-secondary" @click="exportModalOpen = false">取消</button>
-          <button class="btn btn-primary export-start-btn" @click="startExportVideo">
-            ▶ 开始录制并导出
-          </button>
         </div>
       </div>
     </div>

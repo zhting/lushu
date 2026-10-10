@@ -117,7 +117,7 @@ export function buildCruiseTrack(
         stop: s,
         dayIndex: dayIdx,
         dayId: day.id,
-        stopIndex: sIdx + 1,
+        stopIndex: milestones.length + 1,
         city: extractCity(s),
         name: s.name,
         milestoneDist: 0, // 下面根据轨迹匹配

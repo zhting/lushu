@@ -1,29 +1,30 @@
 /**
  * 自驾巡游 16:9 视频录制与导出服务
- * 基于 WebRTC 屏幕/标签页捕获 + 离屏 16:9 画幅 Canvas 重采样 + MediaRecorder 编码导出
+ * 直接基于离屏 16:9 Canvas 实时合成地图瓦片、规划路线、地点标记、巡游小车与 HUD，
+ * 通过 canvas.captureStream + MediaRecorder 零弹窗直接导出视频（无需浏览器屏幕共享授权弹窗）
  */
 
 export interface StartRecordingOptions {
-  targetElement: HTMLElement
   width?: number
   height?: number
   fps?: number
-  onAutoStop?: (blob: Blob) => void
-  onError?: (err: Error) => void
+  onRenderFrame: (ctx: CanvasRenderingContext2D, width: number, height: number) => void
 }
 
 export interface RecordingSession {
+  renderNow: () => void
   stop: () => Promise<Blob>
   cancel: () => void
   isRecording: () => boolean
 }
 
-/** 检查当前浏览器是否支持视频录制导出功能 */
+/** 检查当前浏览器是否支持 Canvas 视频录制导出功能 */
 export function isVideoRecordingSupported(): boolean {
   return (
     typeof window !== 'undefined' &&
-    !!navigator?.mediaDevices?.getDisplayMedia &&
-    typeof window.MediaRecorder !== 'undefined'
+    typeof window.MediaRecorder !== 'undefined' &&
+    typeof HTMLCanvasElement !== 'undefined' &&
+    typeof HTMLCanvasElement.prototype.captureStream === 'function'
   )
 }
 
@@ -38,7 +39,6 @@ export function getSupportedMimeType(): string {
     'video/webm;codecs=vp8',
     'video/webm',
   ]
-  // 都不支持时返回空串，交给浏览器选默认格式；最终格式以 recorder.mimeType 为准
   return types.find((t) => MediaRecorder.isTypeSupported(t)) || ''
 }
 
@@ -53,93 +53,42 @@ export function videoFormatOf(blob: Blob): { ext: 'mp4' | 'webm'; label: string 
 }
 
 /**
- * 启动 16:9 视频录制会话
+ * 启动零弹窗 16:9 Canvas 视频录制会话
  */
 export async function start16x9Recording(
   options: StartRecordingOptions,
 ): Promise<RecordingSession> {
-  const { targetElement, width = 1920, height = 1080, fps = 30 } = options
+  const { width = 1920, height = 1080, fps = 30, onRenderFrame } = options
 
   if (!isVideoRecordingSupported()) {
-    throw new Error('当前浏览器不支持屏幕视频录制，请使用较新版本的 Chrome、Edge 或 Firefox 浏览器')
+    throw new Error('当前浏览器不支持视频录制导出，请使用 Chrome、Edge 或 Firefox 浏览器')
   }
 
-  // 1. 请求捕获标签页画面（提示优先选择当前标签页）
-  let captureStream: MediaStream
-  try {
-    captureStream = await navigator.mediaDevices.getDisplayMedia({
-      video: {
-        displaySurface: 'browser',
-        frameRate: { ideal: fps, max: 60 },
-      },
-      audio: false,
-      // @ts-ignore
-      preferCurrentTab: true,
-      // @ts-ignore
-      selfBrowserSurface: 'include',
-      // @ts-ignore
-      systemAudio: 'exclude',
-    })
-  } catch (err: any) {
-    if (err?.name === 'NotAllowedError') {
-      throw new Error('已取消屏幕录制授权')
-    }
-    throw err
-  }
-
-  // 2. 创建隐藏 video 元素接收流像素
-  const video = document.createElement('video')
-  video.muted = true
-  video.autoplay = true
-  video.playsInline = true
-  video.srcObject = captureStream
-
-  await new Promise<void>((resolve, reject) => {
-    video.onloadedmetadata = () => {
-      video.play().then(resolve).catch(reject)
-    }
-    video.onerror = (e) => reject(new Error('视频流播放失败'))
-  })
-
-  // 3. 构建 16:9 离屏重采样 Canvas
   const canvas = document.createElement('canvas')
   canvas.width = width
   canvas.height = height
-  const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true })
+  const ctx = canvas.getContext('2d', { alpha: false })
   if (!ctx) {
-    captureStream.getTracks().forEach((t) => t.stop())
     throw new Error('无法创建 Canvas 2D 绘图上下文')
   }
 
-  let rafId: number | null = null
   let active = true
 
-  // 帧重采样循环：精确计算 targetElement 在捕获画面中的坐标并剪切至 16:9 画幅
-  const renderFrame = () => {
+  const renderNow = () => {
     if (!active) return
-
-    const rect = targetElement.getBoundingClientRect()
-    const videoWidth = video.videoWidth || window.innerWidth
-    const videoHeight = video.videoHeight || window.innerHeight
-
-    const scaleX = videoWidth / window.innerWidth
-    const scaleY = videoHeight / window.innerHeight
-
-    const sx = Math.max(0, rect.left * scaleX)
-    const sy = Math.max(0, rect.top * scaleY)
-    const sw = Math.min(videoWidth - sx, rect.width * scaleX)
-    const sh = Math.min(videoHeight - sy, rect.height * scaleY)
-
-    if (sw > 0 && sh > 0) {
-      ctx.drawImage(video, sx, sy, sw, sh, 0, 0, width, height)
+    try {
+      onRenderFrame(ctx, width, height)
+    } catch {
+      // 忽略单帧绘制异常，保证录制流不中断
     }
-
-    rafId = requestAnimationFrame(renderFrame)
   }
 
-  rafId = requestAnimationFrame(renderFrame)
+  // 立即绘制首帧
+  renderNow()
 
-  // 4. 从 Canvas 捕获高质量视频流并创建 MediaRecorder
+  // 定时刷新保证即使在到站停留帧也有稳定的帧率输出
+  const timerId = window.setInterval(renderNow, Math.round(1000 / fps))
+
   const canvasStream = canvas.captureStream(fps)
   const mimeType = getSupportedMimeType()
   const chunks: Blob[] = []
@@ -163,7 +112,6 @@ export async function start16x9Recording(
   let stopPromiseResolve: ((blob: Blob) => void) | null = null
   let isCancelled = false
 
-  // 实际编码格式：以浏览器最终采用的 mimeType 为准（Firefox 等只能录 WebM）
   const outputType = () => containerType(recorder.mimeType || mimeType)
 
   recorder.onstop = () => {
@@ -172,42 +120,27 @@ export async function start16x9Recording(
     if (stopPromiseResolve) {
       stopPromiseResolve(finalBlob)
       stopPromiseResolve = null
-    } else {
-      // 仅当用户在浏览器原生浮条上点击「停止共享」时，才走自动停止回调
-      options.onAutoStop?.(finalBlob)
     }
   }
 
-  recorder.start(250)
-
-  // 监听用户点击浏览器原生浮条的「停止共享」
-  const videoTrack = captureStream.getVideoTracks()[0]
-  if (videoTrack) {
-    videoTrack.onended = () => {
-      if (active) {
-        void stop()
-      }
-    }
-  }
+  recorder.start(200)
 
   const stop = (): Promise<Blob> => {
     if (!active) {
       return Promise.resolve(new Blob(chunks, { type: outputType() }))
     }
+    renderNow()
     active = false
-
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId)
-      rafId = null
-    }
+    window.clearInterval(timerId)
 
     return new Promise<Blob>((resolve) => {
       stopPromiseResolve = resolve
       if (recorder.state !== 'inactive') {
         recorder.stop()
+      } else {
+        resolve(new Blob(chunks, { type: outputType() }))
       }
-      captureStream.getTracks().forEach((t) => t.stop())
-      video.srcObject = null
+      canvasStream.getTracks().forEach((t) => t.stop())
     })
   }
 
@@ -215,30 +148,26 @@ export async function start16x9Recording(
     if (!active) return
     active = false
     isCancelled = true
-
-    if (rafId !== null) {
-      cancelAnimationFrame(rafId)
-      rafId = null
-    }
+    window.clearInterval(timerId)
 
     if (recorder.state !== 'inactive') {
       try {
         recorder.stop()
       } catch {}
     }
-    captureStream.getTracks().forEach((t) => t.stop())
-    video.srcObject = null
+    canvasStream.getTracks().forEach((t) => t.stop())
   }
 
   return {
+    renderNow,
     stop,
     cancel,
     isRecording: () => active,
   }
 }
 
-/** 触发视频文件下载：后缀与实际编码一致（MP4 或 WebM），避免 WebM 被改名成 .mp4 后播放器打不开 */
-export function downloadVideoBlob(blob: Blob, filename = '自驾路线巡游-16比9'): { ext: string; label: string } {
+/** 触发视频文件下载：后缀与实际编码一致（MP4 或 WebM） */
+export function downloadVideoBlob(blob: Blob, filename = '自驾路线巡游'): { ext: string; label: string } {
   const fmt = videoFormatOf(blob)
   const cleanName = filename.replace(/\.(webm|mp4)$/i, '')
   const finalName = `${cleanName}.${fmt.ext}`
