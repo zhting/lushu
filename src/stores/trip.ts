@@ -148,6 +148,8 @@ export const useTripStore = defineStore('trip', () => {
     securityJsCode: '',
   })
   const hasAmapKey = ref(false) // 服务端是否已配置高德 Key
+  const hasAi = ref(false) // 管理员是否已配置 AI 服务
+  const aiVision = ref(false) // AI 模型能否识别图片
   const adminOpen = ref(false) // 管理后台页（仅管理员可见入口）
   const mapOpen = ref(false) // 移动端：地图按需全屏展开（桌面端地图常驻，不受影响）
   const pickerOpen = ref(false) // 「添加节点」全屏选点页：上搜索、背后地图
@@ -183,6 +185,8 @@ export const useTripStore = defineStore('trip', () => {
 
   // ───────────────────────── 服务端数据加载 / 持久化 ─────────────────────────
   function applyConfig(cfg: MapConfig) {
+    hasAi.value = !!cfg.hasAi
+    aiVision.value = !!cfg.aiVision
     mapCfg.key = cfg.amapKey || ''
     mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
     hasAmapKey.value = cfg.hasAmapKey
@@ -675,6 +679,38 @@ export const useTripStore = defineStore('trip', () => {
     saveNow()
   }
 
+  /**
+   * 用 AI 识别并经地图匹配后的地点生成路书。
+   * 每天的地点按顺序写入；从第二天起若首站与前一天末站同名（AI 重复写了），去掉以免和自动接续重复。
+   */
+  function createTripFromPlan(
+    title: string,
+    startDate: string,
+    days: { stops: { poi: Poi; kind: StopKind; stayMinutes: number | null; note: string }[] }[],
+  ) {
+    const list = days.filter((d) => d.stops.length)
+    if (!list.length) return
+    createTrip(title, startDate, list.length)
+    const t = trip.value!
+    list.forEach((d, i) => {
+      const stops: Stop[] = d.stops.map((x) => {
+        const st = mkStop(x.poi, x.kind)
+        st.stayMinutes = x.stayMinutes ?? defaultStay(x.kind)
+        st.note = x.note || ''
+        return st
+      })
+      const prevLast = i > 0 ? t.days[i - 1].stops[t.days[i - 1].stops.length - 1] : null
+      if (prevLast && stops[0] && Math.abs(prevLast.lng - stops[0].lng) < 5e-4 && Math.abs(prevLast.lat - stops[0].lat) < 5e-4) {
+        stops.shift()
+      }
+      t.days[i].stops = stops
+    })
+    syncContinuationStops(t)
+    view.value = t.days[0].id
+    t.days.forEach((d) => touchLegs(d.id))
+    saveNow()
+  }
+
   function loadSample() {
     createTrip(SAMPLE_TITLE, todayStr(), SAMPLE_DAYS.length)
     const days = trip.value!.days
@@ -1145,11 +1181,11 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, offlineMode, offlineSyncedAt, pendingCount, shareRecordSeq, recordingForShare, pendingShareVideo, legDistances, legDurations, legTolls, legFailed, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, hasAi, aiVision, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, offlineMode, offlineSyncedAt, pendingCount, shareRecordSeq, recordingForShare, pendingShareVideo, legDistances, legDurations, legTolls, legFailed, legPaths,
     tripSummaries,
     init: loadAll, notify, save, saveNow, reset, syncPending,
     applyProvider, applyServerConfig, retryLegs,
-    createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
+    createTrip, createTripFromPlan, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay, reorderDays,
     addStop, insertStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, setDepartTime, applyPicked,
     openPicker, openStopEditor, closePicker, pickSearchResult,

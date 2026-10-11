@@ -51,6 +51,32 @@ export interface MapConfig {
   amapSecurityJsCode: string
   hasAmapKey: boolean
   defaultProvider: 'osm' | 'amap'
+  hasAi?: boolean
+  aiVision?: boolean
+}
+
+export interface AiAdminConfig {
+  baseUrl: string
+  model: string
+  vision: boolean
+  hasKey: boolean
+  keyHint: string
+}
+
+/** AI 识别 / 规划出的行程（地点尚未匹配坐标） */
+export interface AiPlanStop {
+  name: string
+  city: string
+  kind: 'waypoint' | 'scenic' | 'food' | 'fuel' | 'hotel'
+  stayMinutes: number | null
+  note: string
+}
+
+export interface AiPlan {
+  title: string
+  mode: 'extract' | 'plan'
+  days: { stops: AiPlanStop[] }[]
+  notes: string
 }
 
 export const api = {
@@ -70,6 +96,11 @@ export const api = {
   getShared: (token: string): Promise<{ mime: string; size: number; createdAt: number }> =>
     request('GET', `/api/public/share/${encodeURIComponent(token)}`),
   uploadShareVideo,
+  adminGetAi: (): Promise<AiAdminConfig> => request('GET', '/api/admin/ai'),
+  adminSaveAi: (cfg: Partial<AiAdminConfig> & { apiKey?: string; clearKey?: boolean }): Promise<AiAdminConfig> =>
+    request('PUT', '/api/admin/ai', cfg),
+  aiParse: (input: { text: string; images: string[]; startDate: string; hints?: string }): Promise<AiPlan> =>
+    request('POST', '/api/ai/parse', input),
 }
 
 export interface ShareInfo {
