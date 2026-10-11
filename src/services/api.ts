@@ -53,8 +53,41 @@ export const api = {
   getTrips: () => request('GET', '/api/trips'),
   putTrip: (entry: unknown) => request('PUT', `/api/trips/${(entry as any).id}`, entry),
   deleteTrip: (id: string) => request('DELETE', `/api/trips/${id}`),
-  getShare: (id: string): Promise<{ token: string | null }> => request('GET', `/api/trips/${id}/share`),
-  createShare: (id: string): Promise<{ token: string }> => request('POST', `/api/trips/${id}/share`),
+  getShare: (id: string): Promise<ShareInfo> => request('GET', `/api/trips/${id}/share`),
   revokeShare: (id: string) => request('DELETE', `/api/trips/${id}/share`),
-  getShared: (token: string) => request('GET', `/api/public/share/${encodeURIComponent(token)}`),
+  getShared: (token: string): Promise<{ mime: string; size: number; createdAt: number }> =>
+    request('GET', `/api/public/share/${encodeURIComponent(token)}`),
+  uploadShareVideo,
+}
+
+export interface ShareInfo {
+  token: string | null
+  size?: number
+  mime?: string
+  createdAt?: number
+}
+
+/** 上传分享视频（XHR 以便显示上传进度）；同一路书重复上传会替换视频、沿用链接 */
+function uploadShareVideo(tripId: string, blob: Blob, onProgress?: (ratio: number) => void): Promise<ShareInfo> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('PUT', `/api/trips/${encodeURIComponent(tripId)}/share/video`)
+    const token = getToken()
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    xhr.setRequestHeader('Content-Type', blob.type.includes('mp4') ? 'video/mp4' : 'video/webm')
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
+    }
+    xhr.onload = () => {
+      let data: any = null
+      try {
+        data = JSON.parse(xhr.responseText)
+      } catch { /* 非 JSON（如反向代理的 413 页面） */ }
+      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
+      else if (xhr.status === 413) reject(new Error('视频太大，服务器拒收（请联系管理员调大上传限制）'))
+      else reject(new Error(data?.error || `上传失败（HTTP ${xhr.status}）`))
+    }
+    xhr.onerror = () => reject(new Error('网络错误，视频上传失败'))
+    xhr.send(blob)
+  })
 }

@@ -1739,7 +1739,7 @@ async function startExportVideo() {
   if (!isRecording.value) return
 
   try {
-    store.notify('🎬 正在录制导出巡游视频，播放完成后将自动下载…')
+    store.notify(store.recordingForShare ? '🎬 正在录制分享视频，播放完成后自动上传…' : '🎬 正在录制导出巡游视频，播放完成后将自动下载…')
     const session = await start16x9Recording({
       width: 1920,
       height: 1080,
@@ -1791,12 +1791,38 @@ async function finishRecording() {
       redraw()
     })
 
-    safeTriggerVideoDownload(blob)
+    if (store.recordingForShare) {
+      // 为分享录制：不下载，交给分享弹窗上传
+      store.deliverShareVideo(blob)
+      store.closeMap()
+    } else {
+      safeTriggerVideoDownload(blob)
+    }
   } catch (err: any) {
     isRecording.value = false
+    if (store.recordingForShare) store.deliverShareVideo(null)
     store.notify(err?.message || '视频生成失败', 'error')
   }
 }
+
+// 分享弹窗请求「录制并分享」：等地图展开就绪后开始录制全程
+watch(
+  () => store.shareRecordSeq,
+  async () => {
+    if (!store.recordingForShare) return
+    await nextTick()
+    await ensureMap()
+    await new Promise((r) => setTimeout(r, 500)) // 等全屏地图布局与瓦片稳定
+    if (!map) {
+      store.deliverShareVideo(null)
+      store.notify('地图加载失败，无法录制视频', 'error')
+      return
+    }
+    cruiseRange.value = 'all'
+    await startExportVideo()
+    if (!isRecording.value && store.recordingForShare) store.deliverShareVideo(null) // 未能开始录制
+  },
+)
 
 /** 非用户主动的中止（地图关闭 / 组件卸载 / 切换数据源）：停止录制与计时，不生成文件 */
 function abortRecording(reason?: string) {
@@ -1809,6 +1835,7 @@ function abortRecording(reason?: string) {
   activeRecordingSession = null
   isRecording.value = false
   cruisePlaying.value = false
+  if (store.recordingForShare) store.deliverShareVideo(null)
   if (reason) store.notify(reason, 'error')
 }
 
@@ -1823,6 +1850,7 @@ function cancelRecording() {
   }
   isRecording.value = false
   cruisePlaying.value = false
+  if (store.recordingForShare) store.deliverShareVideo(null)
   void nextTick(() => {
     if (loadedProvider === 'osm' && map) map.invalidateSize()
     redraw()

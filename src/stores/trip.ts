@@ -1,4 +1,4 @@
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, reactive, ref, shallowRef, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { Day, EnergyType, MapProvider, Poi, Stop, StopKind, StoredTrip, Trip, Vehicle } from '../types'
 import * as mapSvc from '../services/map'
@@ -152,7 +152,10 @@ export const useTripStore = defineStore('trip', () => {
   const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
   const pickerCity = ref('') // 选点页限定的城市（'' = 不限），打开选点页间保持上次选择
   const pickerKind = ref<StopKind>('waypoint') // 选点页新增节点时选定的类型
-  const readOnly = ref(false) // 只读分享页：不保存、不提供编辑
+  // 分享视频：总览/弹窗发起「为分享录制」→ 地图组件录制 → 录完交回给分享弹窗上传
+  const shareRecordSeq = ref(0)
+  const recordingForShare = ref(false)
+  const pendingShareVideo = shallowRef<Blob | null>(null)
 
   let toastTimer = 0
   function notify(text: string, kind: 'info' | 'error' = 'info') {
@@ -210,7 +213,7 @@ export const useTripStore = defineStore('trip', () => {
 
   function saveNow() {
     const t = trip.value
-    if (!t || !currentId.value || readOnly.value) return
+    if (!t || !currentId.value) return
     const entry: StoredTrip = { id: currentId.value, savedAt: Date.now(), trip: t }
     const i = savedTrips.list.findIndex((e) => e.id === entry.id)
     if (i >= 0) savedTrips.list.splice(i, 1, entry)
@@ -903,20 +906,20 @@ export const useTripStore = defineStore('trip', () => {
     },
   )
 
-  // ───────────────────────── 只读分享页 ─────────────────────────
-  /** 打开分享链接：载入路书为只读，不写服务端 */
-  function openShared(t: Trip, cfg: { amapKey: string; amapSecurityJsCode: string; defaultProvider: string }) {
-    readOnly.value = true
-    mapCfg.key = cfg.amapKey || ''
-    mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
-    hasAmapKey.value = !!mapCfg.key
-    mapCfg.provider = cfg.defaultProvider === 'amap' && mapCfg.key ? 'amap' : 'osm'
-    mapSvc.setProvider(mapCfg.provider)
-    trip.value = migrateTrip(t)
-    currentId.value = null
-    view.value = 'overview'
-    page.value = 'trip'
-    trip.value?.days.forEach((d) => touchLegs(d.id))
+  // ───────────────────────── 分享视频录制 ─────────────────────────
+  /** 请地图组件录制全程巡游视频，录完不下载、交给分享弹窗上传 */
+  function requestShareRecording() {
+    if (!trip.value) return
+    recordingForShare.value = true
+    pendingShareVideo.value = null
+    openMapOverview()
+    shareRecordSeq.value++
+  }
+
+  /** 地图组件录制结束（blob 为 null 表示取消或失败） */
+  function deliverShareVideo(blob: Blob | null) {
+    recordingForShare.value = false
+    pendingShareVideo.value = blob
   }
 
   // ───────────────────────── 导入 / 导出 ─────────────────────────
@@ -939,7 +942,7 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, readOnly, legDistances, legDurations, legTolls, legFailed, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, shareRecordSeq, recordingForShare, pendingShareVideo, legDistances, legDurations, legTolls, legFailed, legPaths,
     tripSummaries,
     init: loadAll, notify, save, saveNow, reset,
     applyProvider, applyServerConfig, retryLegs,
@@ -949,7 +952,7 @@ export const useTripStore = defineStore('trip', () => {
     openPicker, openStopEditor, closePicker, pickSearchResult,
     routePointsOf, originFromPrev,
     dayStats, schedules, dayCost, tripTotals, vehicle, setVehicle,
-    dayWeather, refreshWeather, openShared,
+    dayWeather, refreshWeather, requestShareRecording, deliverShareVideo,
     exportJson, importJson,
   }
 })

@@ -17,7 +17,15 @@ const auth = useAuthStore()
 const showTripMoreMenu = ref(false)
 const showShareSheet = ref(false)
 
-// 只读分享链接 /s/<token>：不走登录，直接渲染分享页
+// 为分享录制的视频生成后，重新打开分享弹窗上传
+watch(
+  () => store.pendingShareVideo,
+  (blob) => {
+    if (blob) showShareSheet.value = true
+  },
+)
+
+// 视频分享链接 /s/<token>：不走登录，直接渲染分享页（只有视频）
 const shareToken = typeof location !== 'undefined' ? location.pathname.match(/^\/s\/([A-Za-z0-9_-]+)\/?$/)?.[1] ?? '' : ''
 
 if (typeof window !== 'undefined') {
