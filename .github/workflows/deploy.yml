@@ -6,6 +6,11 @@ on:
       - main
   workflow_dispatch:
 
+# 连续合并多个 PR 时排队依次部署：多个部署同时运行会争用服务器上的 /tmp/deploy.tar.gz
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
@@ -17,7 +22,7 @@ jobs:
       - name: 设置 Node.js 环境
         uses: actions/setup-node@v4
         with:
-          node-version: 18
+          node-version: 20
           cache: 'npm'
 
       - name: 安装依赖
