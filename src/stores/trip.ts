@@ -1,10 +1,11 @@
 import { computed, reactive, ref } from 'vue'
 import { defineStore } from 'pinia'
-import type { Day, MapProvider, Poi, Stop, StopKind, StoredTrip, Trip } from '../types'
+import type { Day, EnergyType, MapProvider, Poi, Stop, StopKind, StoredTrip, Trip, Vehicle } from '../types'
 import * as mapSvc from '../services/map'
 import { cnOrdinal, todayStr } from '../services/geo'
 import { uid } from '../services/id'
-import { DAY_COLORS, KIND_META } from '../constants'
+import { DAY_COLORS, KIND_META, VEHICLE_DEFAULTS } from '../constants'
+import { daySchedule, energyCost, parseClock, type DaySchedule } from '../services/schedule'
 import { SAMPLE_DAYS, SAMPLE_TITLE } from '../sample'
 import { api } from '../services/api'
 
@@ -148,6 +149,7 @@ export const useTripStore = defineStore('trip', () => {
   const pickerOpen = ref(false) // 「添加节点」全屏选点页：上搜索、背后地图
   const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
   const pickerCity = ref('') // 选点页限定的城市（'' = 不限），打开选点页间保持上次选择
+  const pickerKind = ref<StopKind>('waypoint') // 选点页新增节点时选定的类型
 
   let toastTimer = 0
   function notify(text: string, kind: 'info' | 'error' = 'info') {
@@ -185,6 +187,7 @@ export const useTripStore = defineStore('trip', () => {
     savedTrips.list.splice(0)
     Object.keys(legDistances).forEach((k) => delete legDistances[k])
     Object.keys(legDurations).forEach((k) => delete legDurations[k])
+    Object.keys(legTolls).forEach((k) => delete legTolls[k])
     Object.keys(legPaths).forEach((k) => delete legPaths[k])
     mapCfg.key = ''
     mapCfg.securityJsCode = ''
@@ -235,6 +238,7 @@ export const useTripStore = defineStore('trip', () => {
       // 坐标系不同，旧的车行线路/距离不可混用
       Object.keys(legDistances).forEach((k) => delete legDistances[k])
       Object.keys(legDurations).forEach((k) => delete legDurations[k])
+      Object.keys(legTolls).forEach((k) => delete legTolls[k])
       Object.keys(legPaths).forEach((k) => delete legPaths[k])
       notify(mapCfg.provider === 'osm' ? '全站已切换到开源地图（OpenStreetMap），线路重新规划中' : '全站已切换到高德地图，线路重新规划中')
     }
@@ -371,6 +375,10 @@ export const useTripStore = defineStore('trip', () => {
   const legDistances = reactive<Record<string, number[]>>({})
   /** key = dayId，值 = 相邻节点间车行预估时长（单位：秒，与 routePointsOf 序列一一对应）；拉取失败不写入 */
   const legDurations = reactive<Record<string, number[]>>({})
+  /** key = dayId，值 = 相邻节点间过路费（元）；数据源不提供时该段为 null */
+  const legTolls = reactive<Record<string, (number | null)[]>>({})
+  /** key = dayId，值 = true 表示该天线路重试后仍未算出（界面据此区分「计算中」与「未算出」） */
+  const legFailed = reactive<Record<string, boolean>>({})
   /** key = dayId，值 = 该天逐段车行线路拼接后的折线（地图绘制用） */
   const legPaths = reactive<Record<string, [number, number][]>>({})
   const legTimers: Record<string, number> = {}
@@ -392,20 +400,23 @@ export const useTripStore = defineStore('trip', () => {
     const pts = routePointsOf(dayId)
     const seqId = (legSeq[dayId] ?? 0) + 1
     legSeq[dayId] = seqId
+    delete legFailed[dayId]
     if (pts.length < 2) {
       delete legDistances[dayId]
       delete legDurations[dayId]
+      delete legTolls[dayId]
       delete legPaths[dayId]
       return
     }
     const dists: number[] = []
     const durations: number[] = []
+    const tolls: (number | null)[] = []
     const path: [number, number][] = []
     try {
       for (let i = 1; i < pts.length; i++) {
         // 逐段顺序请求并留出间隔，避免触发公共服务的频率限制；单段失败重试一次
         if (i > 1) await new Promise((r) => setTimeout(r, 400))
-        let r: { distanceM: number; durationS: number; path: [number, number][] }
+        let r: Awaited<ReturnType<typeof mapSvc.legRoute>>
         try {
           r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
         } catch {
@@ -415,18 +426,22 @@ export const useTripStore = defineStore('trip', () => {
         if (legSeq[dayId] !== seqId) return // 期间又被编辑，丢弃过期结果
         dists.push(r.distanceM)
         durations.push(r.durationS)
+        tolls.push(r.tollsYuan)
         path.push(...r.path)
       }
     } catch {
       if (legSeq[dayId] !== seqId) return
+      legFailed[dayId] = true
       delete legDistances[dayId] // 重试后仍失败：距离回退直线、地图回退虚线
       delete legDurations[dayId]
+      delete legTolls[dayId]
       delete legPaths[dayId]
       return
     }
     if (legSeq[dayId] !== seqId) return
     legDistances[dayId] = dists
     legDurations[dayId] = durations
+    legTolls[dayId] = tolls
     legPaths[dayId] = path
     save()
   }
@@ -467,6 +482,8 @@ export const useTripStore = defineStore('trip', () => {
       if (sd.end) stops.push(mkStop(sd.end, sd.end.kind ?? 'hotel'))
       day.stops = stops
     })
+    // 次日的接续出发节点要先实体化，否则线路按缺少首节点的序列计算，之后一同步就对不上
+    syncContinuationStops(trip.value)
     view.value = days[0].id
     trip.value?.days.forEach((d) => touchLegs(d.id))
     saveNow()
@@ -623,7 +640,7 @@ export const useTripStore = defineStore('trip', () => {
     if (s && trimmed) {
       s.name = trimmed
       if (s.fromPrev) s.fromPrev = false
-      if (trip.value) syncContinuationStops(trip.value)
+      if (trip.value && syncContinuationStops(trip.value)) retryLegs()
       touchLegs(nextDayId(dayId))
       save()
     }
@@ -645,7 +662,8 @@ export const useTripStore = defineStore('trip', () => {
     s.kind = kind
     if (s.stayMinutes === 0 && defaultStay(kind) > 0) s.stayMinutes = defaultStay(kind)
     if (s.fromPrev) s.fromPrev = false
-    if (trip.value) syncContinuationStops(trip.value)
+    // 同步若增删了接续节点，节点序列变了，线路要重算（坐标对缓存命中则零请求）
+    if (trip.value && syncContinuationStops(trip.value)) retryLegs()
     save()
   }
 
@@ -657,6 +675,30 @@ export const useTripStore = defineStore('trip', () => {
     day.startAuto = !day.startAuto
     syncContinuationStops(trip.value)
     touchLegs(dayId)
+    save()
+  }
+
+  /** 设置当天出发时间（'HH:mm'） */
+  function setDepartTime(dayId: string, hhmm: string) {
+    const day = findDay(dayId)
+    if (!day || parseClock(hhmm) == null) return
+    day.departTime = hhmm
+    save()
+  }
+
+  // ───────────────────────── 车辆与费用 ─────────────────────────
+  /** 当前路书的车辆能耗设置（旧路书没有该字段时用默认燃油车） */
+  const vehicle = computed<Vehicle>(() => trip.value?.vehicle ?? VEHICLE_DEFAULTS.fuel)
+
+  /** 切换能源类型时整体换成该类型的默认值；改数值时只改对应字段 */
+  function setVehicle(patch: { energy?: EnergyType; consumption?: number; price?: number }) {
+    const t = trip.value
+    if (!t) return
+    let v: Vehicle = { ...vehicle.value }
+    if (patch.energy && patch.energy !== v.energy) v = { ...VEHICLE_DEFAULTS[patch.energy] }
+    if (patch.consumption != null && Number.isFinite(patch.consumption)) v.consumption = Math.max(0, Math.min(100, patch.consumption))
+    if (patch.price != null && Number.isFinite(patch.price)) v.price = Math.max(0, Math.min(100, patch.price))
+    t.vehicle = v
     save()
   }
 
@@ -676,7 +718,7 @@ export const useTripStore = defineStore('trip', () => {
         save()
       }
     } else {
-      addStop(target.dayId, poi)
+      addStop(target.dayId, poi, pickerKind.value)
     }
     closePicker()
   }
@@ -684,6 +726,7 @@ export const useTripStore = defineStore('trip', () => {
   // ───────────────────────── 添加 / 修改节点（全屏选点页） ─────────────────────────
   function openPicker(dayId: string) {
     pickTarget.value = { dayId }
+    pickerKind.value = 'waypoint'
     pickerResults.value = []
     pickerOpen.value = true
   }
@@ -706,7 +749,7 @@ export const useTripStore = defineStore('trip', () => {
     const t = pickTarget.value
     if (!pickerOpen.value || !t) return
     if (t.stopId) updateStopPlace(t.dayId, t.stopId, poi)
-    else addStop(t.dayId, poi)
+    else addStop(t.dayId, poi, pickerKind.value)
     closePicker()
   }
 
@@ -719,6 +762,53 @@ export const useTripStore = defineStore('trip', () => {
       day: d,
       color: DAY_COLORS[i % DAY_COLORS.length],
     }))
+  })
+
+  /** 每天的时间表与里程（key = dayId） */
+  const schedules = computed<Record<string, DaySchedule>>(() => {
+    const out: Record<string, DaySchedule> = {}
+    for (const d of trip.value?.days ?? []) {
+      out[d.id] = daySchedule(d, legDistances[d.id], legDurations[d.id], legTolls[d.id])
+    }
+    return out
+  })
+
+  /** 单日费用：能耗费按里程估算；过路费仅高德模式可得 */
+  function dayCost(dayId: string): { energy: number | null; tolls: number | null } {
+    const sc = schedules.value[dayId]
+    if (!sc) return { energy: null, tolls: null }
+    return {
+      energy: sc.distanceM == null ? null : energyCost(sc.distanceM, vehicle.value),
+      tolls: sc.tollsYuan,
+    }
+  }
+
+  /** 全程合计；pendingDays 为有 ≥2 个地点但线路尚未算出的天数（合计不含这些天） */
+  const tripTotals = computed(() => {
+    let distanceM = 0
+    let driveS = 0
+    let tolls = 0
+    let tollsUnknownDays = 0
+    let pendingDays = 0
+    for (const d of trip.value?.days ?? []) {
+      const sc = schedules.value[d.id]
+      if (!sc) continue
+      if (sc.distanceM == null || sc.driveS == null) {
+        pendingDays++
+        continue
+      }
+      distanceM += sc.distanceM
+      driveS += sc.driveS
+      if (sc.tollsYuan == null) tollsUnknownDays++
+      else tolls += sc.tollsYuan
+    }
+    return {
+      distanceM,
+      driveS,
+      energy: energyCost(distanceM, vehicle.value),
+      tolls: tollsUnknownDays ? null : tolls,
+      pendingDays,
+    }
   })
 
   // ───────────────────────── 导入 / 导出 ─────────────────────────
@@ -741,16 +831,16 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, legDistances, legDurations, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, legDistances, legDurations, legTolls, legFailed, legPaths,
     tripSummaries,
     init: loadAll, notify, save, saveNow, reset,
     applyProvider, applyServerConfig, retryLegs,
     createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay, reorderDays,
-    addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, applyPicked,
+    addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, setDepartTime, applyPicked,
     openPicker, openStopEditor, closePicker, pickSearchResult,
     routePointsOf, originFromPrev,
-    dayStats,
+    dayStats, schedules, dayCost, tripTotals, vehicle, setVehicle,
     exportJson, importJson,
   }
 })

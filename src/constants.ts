@@ -1,4 +1,4 @@
-import type { StopKind } from './types'
+import type { EnergyType, StopKind, Vehicle } from './types'
 
 export const KIND_META: Record<StopKind, { label: string; emoji: string; stay: number }> = {
   waypoint: { label: '途经', emoji: '📍', stay: 0 },
@@ -9,6 +9,25 @@ export const KIND_META: Record<StopKind, { label: string; emoji: string; stay: n
 }
 
 export const KIND_OPTIONS: StopKind[] = ['waypoint', 'scenic', 'food', 'fuel', 'hotel']
+
+/** 节点停留时长快捷选项（分钟） */
+export const STAY_PRESETS = [0, 15, 30, 60, 120, 180, 240]
+
+/** 单日驾驶时长超过该值（分钟）时提醒 */
+export const DRIVE_WARN_MINUTES = 8 * 60
+/** 预计到达晚于该时刻（当天分钟数）时提醒夜间行车 */
+export const LATE_ARRIVAL_MINUTES = 22 * 60
+
+export const ENERGY_META: Record<EnergyType, { label: string; consumptionUnit: string; priceUnit: string; costLabel: string }> = {
+  fuel: { label: '燃油', consumptionUnit: 'L/100km', priceUnit: '元/L', costLabel: '油费' },
+  ev: { label: '纯电', consumptionUnit: 'kWh/100km', priceUnit: '元/kWh', costLabel: '电费' },
+}
+
+/** 车辆能耗默认值（用户可在总览「编辑 → 车辆与费用」中修改） */
+export const VEHICLE_DEFAULTS: Record<EnergyType, Vehicle> = {
+  fuel: { energy: 'fuel', consumption: 8, price: 7.5 },
+  ev: { energy: 'ev', consumption: 15, price: 1.2 },
+}
 
 // 每天一条路线一种颜色（精选与地图底图公路反差极大的高对比度自驾色系，杜绝与黄色/橙色底图公路撞色）
 export const DAY_COLORS = [

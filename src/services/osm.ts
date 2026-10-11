@@ -1,3 +1,4 @@
+import type { LegResult } from './amap'
 import type { Poi } from '../types'
 
 let L: any = null
@@ -97,13 +98,13 @@ export function currentPosition(): Promise<{ lng: number; lat: number }> {
   })
 }
 
-const legCache = new Map<string, { distanceM: number; durationS: number; path: [number, number][] }>()
+const legCache = new Map<string, LegResult>()
 
 /** 相邻两点间的车行导航线路（OSRM 演示服务）：距离 + 耗时 + 完整折线，按坐标对缓存 */
 export async function legRoute(
   a: { lng: number; lat: number },
   b: { lng: number; lat: number },
-): Promise<{ distanceM: number; durationS: number; path: [number, number][] }> {
+): Promise<LegResult> {
   const key = `${a.lng.toFixed(5)},${a.lat.toFixed(5)}|${b.lng.toFixed(5)},${b.lat.toFixed(5)}`
   const hit = legCache.get(key)
   if (hit) return hit
@@ -116,7 +117,7 @@ export async function legRoute(
   const dur = Number(route?.duration) || 0
   const path = (route?.geometry?.coordinates ?? []) as [number, number][]
   if (data?.code !== 'Ok' || !Number.isFinite(d) || path.length < 2) throw new Error('未测到车行线路（OSRM）')
-  const out = { distanceM: d, durationS: Math.round(dur), path }
+  const out: LegResult = { distanceM: d, durationS: Math.round(dur), tollsYuan: null, path } // OSRM 不提供过路费
   legCache.set(key, out)
   return out
 }

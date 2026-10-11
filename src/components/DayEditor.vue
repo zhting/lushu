@@ -2,8 +2,9 @@
 import { computed, ref } from 'vue'
 import { useTripStore } from '../stores/trip'
 import { fmtDistance, fmtDuration, haversineKm } from '../services/geo'
+import { fmtClock, fmtStay, fmtYuan } from '../services/schedule'
+import { DRIVE_WARN_MINUTES, ENERGY_META, LATE_ARRIVAL_MINUTES } from '../constants'
 import Draggable from 'vuedraggable'
-import type { StopKind } from '../types'
 
 const props = defineProps<{ dayId: string }>()
 const store = useTripStore()
@@ -26,22 +27,6 @@ function stationNumber(j: number): number {
   return j + 1
 }
 
-/** 获取地点类型的代表性图标（设计图中为房屋/景点微标） */
-function kindIcon(kind?: StopKind): string {
-  switch (kind) {
-    case 'hotel':
-      return '🏠'
-    case 'scenic':
-      return '🏛️'
-    case 'food':
-      return '🍜'
-    case 'fuel':
-      return '⛽️'
-    default:
-      return '🏠'
-  }
-}
-
 /** 本节点到下一节点的距离与耗时。优先车行导航距离与时长，未取到时回退直线 */
 function legText(j: number): string {
   if (!day.value || j + 1 >= day.value.stops.length) return ''
@@ -51,12 +36,41 @@ function legText(j: number): string {
     const d = legs[j]
     const dur = durations?.[j]
     if (d != null) {
-      const durStr = dur ? fmtDuration(dur) : ''
-      return durStr ? `车行约 ${fmtDistance(d)} · ${durStr}` : `车行约 ${fmtDistance(d)}`
+      const parts = [`车行约 ${fmtDistance(d)}`]
+      if (dur) parts.push(fmtDuration(dur))
+      const toll = store.legTolls[props.dayId]?.[j]
+      if (toll) parts.push(`过路费 ${fmtYuan(toll)}`)
+      return parts.join(' · ')
     }
   }
   const m = Math.round(haversineKm(day.value.stops[j], day.value.stops[j + 1]) * 1000)
   return m > 0 ? `直线约 ${fmtDistance(m)}` : ''
+}
+
+// ── 当天时间表与费用 ──
+const sched = computed(() => store.schedules[props.dayId] ?? null)
+const cost = computed(() => store.dayCost(props.dayId))
+const energyLabel = computed(() => ENERGY_META[store.vehicle.energy].costLabel)
+const driveWarn = computed(() => (sched.value?.driveS ?? 0) / 60 > DRIVE_WARN_MINUTES)
+const lateWarn = computed(() => sched.value?.endMin != null && sched.value.endMin > LATE_ARRIVAL_MINUTES)
+const tollsUnsupported = computed(() => store.mapCfg.provider !== 'amap')
+
+function onDepartChange(e: Event) {
+  store.setDepartTime(props.dayId, (e.target as HTMLInputElement).value)
+}
+
+/** 节点下方的时间说明：首站「08:00 出发」，其余「10:30 到 · 停留 2小时」 */
+function stopTimeText(j: number): string {
+  const sc = sched.value
+  const d = day.value
+  if (!sc || !d) return ''
+  if (j === 0) return d.stops.length > 1 ? `${fmtClock(sc.departMin)} 出发` : ''
+  const parts: string[] = []
+  const arr = sc.arrive[j]
+  if (arr != null) parts.push(`${fmtClock(arr)} 到`)
+  const stay = d.stops[j].stayMinutes
+  if (j < d.stops.length - 1 && stay) parts.push(`停留 ${fmtStay(stay)}`)
+  return parts.join(' · ')
 }
 
 function toggleStopMenu(stopId: string, e: MouseEvent) {
@@ -80,6 +94,43 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
         <span class="banner-text">🚩 从本日第一个地点出发</span>
         <button v-if="prevLast" class="btn-text-action" @click="store.toggleStartAuto(day.id)">改为接续前一天终点</button>
       </template>
+    </div>
+
+    <!-- 当天时间表：出发时间 / 驾驶时长 / 预计到达 / 费用 -->
+    <div v-if="sched" class="day-plan">
+      <div class="day-plan-main">
+        <label class="depart-field" title="修改当天出发时间">
+          <span>出发</span>
+          <input type="time" :value="day.departTime" @change="onDepartChange" />
+        </label>
+        <template v-if="day.stops.length > 1">
+          <span v-if="!sched.durationsKnown" class="day-plan-stat muted">
+            {{ store.legFailed[dayId] ? '车行线路未算出，暂无法推算到达时间' : '线路计算中…' }}
+          </span>
+          <template v-else>
+            <span class="day-plan-stat">
+              <span class="muted">驾驶</span> <b>{{ fmtDuration(sched.driveS ?? 0) || '—' }}</b>
+              <span v-if="sched.distanceM" class="muted"> · {{ fmtDistance(sched.distanceM) }}</span>
+            </span>
+            <span v-if="sched.endMin != null" class="day-plan-stat">
+              <span class="muted">预计</span> <b>{{ fmtClock(sched.endMin) }}</b> <span class="muted">到达</span>
+            </span>
+          </template>
+        </template>
+        <span v-else class="day-plan-stat muted">添加两个以上地点后推算到达时间</span>
+      </div>
+      <div v-if="day.stops.length > 1 && sched.durationsKnown" class="day-plan-cost">
+        <span v-if="cost.energy != null">{{ energyLabel }}约 <b>{{ fmtYuan(cost.energy) }}</b></span>
+        <span v-if="cost.tolls != null">过路费 <b>{{ fmtYuan(cost.tolls) }}</b></span>
+        <span v-else-if="tollsUnsupported" class="muted">过路费：开源地图不提供</span>
+        <span v-if="sched.stayMin" class="muted">途中停留 {{ fmtStay(sched.stayMin) }}</span>
+      </div>
+      <div v-if="driveWarn" class="day-plan-warn">
+        ⚠️ 今天驾驶约 {{ fmtDuration(sched.driveS ?? 0) }}，超过 {{ DRIVE_WARN_MINUTES / 60 }} 小时，建议拆成两天或多安排休息
+      </div>
+      <div v-if="lateWarn && sched.endMin != null" class="day-plan-warn">
+        🌙 预计 {{ fmtClock(sched.endMin) }} 才到，注意夜间行车，可提早出发或减少停留
+      </div>
     </div>
 
     <!-- 拖拽排序的节点时间轴 -->
@@ -116,8 +167,11 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
                 <svg v-else-if="s.kind === 'fuel'" class="station-svg" viewBox="0 0 24 24" fill="currentColor">
                   <path d="M19.77 7.23l.01-.01-3.72-3.72L15 4.56l2.11 2.11c-.94.36-1.61 1.26-1.61 2.33a2.5 2.5 0 002.5 2.5c.36 0 .69-.1.97-.28l1.46 1.46c-.76 2.36-2.28 4.95-3.43 6.32V19h-2v-8c0-1.1-.9-2-2-2H6c-1.1 0-2 .9-2 2v10h10v-3.81c1.55-1.78 3.52-5.11 4.41-7.85l1.36 1.36 1.42-1.41-1.42-1.41v-.01l-.01.01-1.99-1.99zM12 14H6v-3h6v3z"/>
                 </svg>
+                <svg v-else-if="s.kind === 'hotel'" class="station-svg" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M7 13c1.66 0 3-1.34 3-3S8.66 7 7 7s-3 1.34-3 3 1.34 3 3 3zm12-6h-8v7H3V5H1v15h2v-3h18v3h2v-9c0-2.21-1.79-4-4-4z"/>
+                </svg>
                 <svg v-else class="station-svg" viewBox="0 0 24 24" fill="currentColor">
-                  <path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/>
+                  <path d="M12 2C8.13 2 5 5.13 5 9c0 5.25 7 13 7 13s7-7.75 7-13c0-3.87-3.13-7-7-7zm0 9.5a2.5 2.5 0 010-5 2.5 2.5 0 010 5z"/>
                 </svg>
               </div>
 
@@ -158,7 +212,7 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
                     class="popover-item"
                     @click="store.openStopEditor(day.id, s.id); activeMenuStopId = null"
                   >
-                    ✏️ 编辑地点信息
+                    ✏️ 编辑地点 / 类型 / 停留
                   </button>
                   <div class="popover-divider"></div>
                   <button
@@ -170,6 +224,9 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
                 </div>
               </div>
             </div>
+
+            <!-- 预计到达 / 停留 -->
+            <div v-if="stopTimeText(j)" class="tl-stop-time">{{ stopTimeText(j) }}</div>
 
             <!-- 节点间车行信息 -->
             <div v-if="legText(j)" class="tl-leg-pill">
