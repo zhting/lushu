@@ -157,9 +157,51 @@ app.delete('/api/trips/:id', auth, (req, res) => {
   const i = list.findIndex((e) => e.id === req.params.id)
   if (i >= 0) {
     list.splice(i, 1)
+    revokeShares(req.user, req.params.id) // 路书删了，分享链接一并失效
     saveDb()
   }
   res.json({ ok: true })
+})
+
+// ───────────────────────── 只读分享链接 ─────────────────────────
+// 每本路书最多一个有效链接；链接里只有随机 token，不含用户名和路书 id。
+function shareTokenOf(username, tripId) {
+  return Object.keys(db.shares).find((t) => db.shares[t].username === username && db.shares[t].tripId === tripId) || null
+}
+
+function revokeShares(username, tripId) {
+  for (const t of Object.keys(db.shares)) {
+    if (db.shares[t].username === username && db.shares[t].tripId === tripId) delete db.shares[t]
+  }
+}
+
+app.get('/api/trips/:id/share', auth, (req, res) => {
+  res.json({ token: shareTokenOf(req.user, req.params.id) })
+})
+
+app.post('/api/trips/:id/share', auth, (req, res) => {
+  if (!userTrips(req.user).some((e) => e.id === req.params.id)) return fail(res, 404, '路书不存在')
+  let token = shareTokenOf(req.user, req.params.id)
+  if (!token) {
+    token = crypto.randomBytes(12).toString('base64url')
+    db.shares[token] = { username: req.user, tripId: req.params.id, createdAt: Date.now() }
+    saveDb()
+  }
+  res.json({ token })
+})
+
+app.delete('/api/trips/:id/share', auth, (req, res) => {
+  revokeShares(req.user, req.params.id)
+  saveDb()
+  res.json({ ok: true })
+})
+
+// 公开接口：凭 token 只读获取路书（不需要登录）。地图配置一并返回，分享页才能加载同一套地图。
+app.get('/api/public/share/:token', (req, res) => {
+  const share = db.shares[req.params.token]
+  const entry = share && (db.trips[share.username] || []).find((e) => e.id === share.tripId)
+  if (!entry) return fail(res, 404, '分享链接不存在或已关闭')
+  res.json({ trip: entry.trip, savedAt: entry.savedAt, owner: share.username, config: publicConfig() })
 })
 
 // ───────────────────────── 静态托管（生产模式） ─────────────────────────

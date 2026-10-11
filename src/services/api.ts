@@ -53,4 +53,8 @@ export const api = {
   getTrips: () => request('GET', '/api/trips'),
   putTrip: (entry: unknown) => request('PUT', `/api/trips/${(entry as any).id}`, entry),
   deleteTrip: (id: string) => request('DELETE', `/api/trips/${id}`),
+  getShare: (id: string): Promise<{ token: string | null }> => request('GET', `/api/trips/${id}/share`),
+  createShare: (id: string): Promise<{ token: string }> => request('POST', `/api/trips/${id}/share`),
+  revokeShare: (id: string) => request('DELETE', `/api/trips/${id}/share`),
+  getShared: (token: string) => request('GET', `/api/public/share/${encodeURIComponent(token)}`),
 }

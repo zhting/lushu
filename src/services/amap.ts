@@ -263,3 +263,38 @@ export async function searchCities(kw: string): Promise<CityItem[]> {
   return results
 }
 
+
+/** 周边搜索（高德 PlaceSearch.searchNearBy）：按 POI 类型码在某点半径内搜索 */
+export async function searchNearby(
+  center: { lng: number; lat: number },
+  typeCode: string,
+  radiusM: number,
+  key = '',
+  securityJsCode = '',
+): Promise<Poi[]> {
+  if (!getAMap()) await loadAMap(key, securityJsCode)
+  const AMap = getAMap()!
+  const ps = new AMap.PlaceSearch({ type: typeCode, pageSize: 10, pageIndex: 1, extensions: 'base' })
+  return new Promise((resolve, reject) => {
+    ps.searchNearBy('', new AMap.LngLat(center.lng, center.lat), radiusM, (status: string, result: any) => {
+      if (status === 'complete') {
+        const pois = result?.poiList?.pois ?? []
+        resolve(
+          pois
+            .map((p: any) => ({
+              name: p.name ?? '未命名地点',
+              address: [p.cityname, p.adname, p.address].filter(Boolean).join(''),
+              district: [p.pname, p.cityname].filter(Boolean).join('·'),
+              lng: p.location?.lng,
+              lat: p.location?.lat,
+            }))
+            .filter((p: Poi) => Number.isFinite(p.lng) && Number.isFinite(p.lat)),
+        )
+      } else if (status === 'no_data') {
+        resolve([])
+      } else {
+        reject(new Error(friendlyError(status, result)))
+      }
+    })
+  })
+}

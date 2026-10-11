@@ -1,8 +1,10 @@
-import { computed, reactive, ref } from 'vue'
+import { computed, reactive, ref, watch } from 'vue'
 import { defineStore } from 'pinia'
 import type { Day, EnergyType, MapProvider, Poi, Stop, StopKind, StoredTrip, Trip, Vehicle } from '../types'
 import * as mapSvc from '../services/map'
-import { cnOrdinal, todayStr } from '../services/geo'
+import { cnOrdinal, dateOfDay, todayStr } from '../services/geo'
+import { fetchForecast, FORECAST_DAYS, type DayWeather } from '../services/weather'
+import { ymd } from '../services/exporters'
 import { uid } from '../services/id'
 import { DAY_COLORS, KIND_META, VEHICLE_DEFAULTS } from '../constants'
 import { daySchedule, energyCost, parseClock, type DaySchedule } from '../services/schedule'
@@ -150,6 +152,7 @@ export const useTripStore = defineStore('trip', () => {
   const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
   const pickerCity = ref('') // 选点页限定的城市（'' = 不限），打开选点页间保持上次选择
   const pickerKind = ref<StopKind>('waypoint') // 选点页新增节点时选定的类型
+  const readOnly = ref(false) // 只读分享页：不保存、不提供编辑
 
   let toastTimer = 0
   function notify(text: string, kind: 'info' | 'error' = 'info') {
@@ -207,7 +210,7 @@ export const useTripStore = defineStore('trip', () => {
 
   function saveNow() {
     const t = trip.value
-    if (!t || !currentId.value) return
+    if (!t || !currentId.value || readOnly.value) return
     const entry: StoredTrip = { id: currentId.value, savedAt: Date.now(), trip: t }
     const i = savedTrips.list.findIndex((e) => e.id === entry.id)
     if (i >= 0) savedTrips.list.splice(i, 1, entry)
@@ -553,6 +556,23 @@ export const useTripStore = defineStore('trip', () => {
     return true
   }
 
+  /** 在指定位置插入节点（沿途补给加入当天用）；index 越界时追加到末尾 */
+  function insertStop(dayId: string, poi: Poi, kind: StopKind, index: number): boolean {
+    const day = findDay(dayId)
+    if (!day) return false
+    const s = mkStop(poi, kind)
+    s.stayMinutes = defaultStay(kind)
+    // 不能插到接续出发节点之前
+    const minIdx = day.stops[0]?.fromPrev ? 1 : 0
+    const at = Math.max(minIdx, Math.min(day.stops.length, Math.round(index)))
+    day.stops.splice(at, 0, s)
+    if (trip.value) syncContinuationStops(trip.value)
+    touchLegs(dayId)
+    touchLegs(nextDayId(dayId))
+    save()
+    return true
+  }
+
   function removeStop(dayId: string, stopId: string) {
     const day = findDay(dayId)
     if (!day) return
@@ -811,6 +831,94 @@ export const useTripStore = defineStore('trip', () => {
     }
   })
 
+  // ───────────────────────── 天气（当天最后一个地点、当天日期） ─────────────────────────
+  /** key = 「纬度,经度,日期」（坐标取两位小数），值 = 预报；null 表示查过但没有数据 */
+  const weatherCache = reactive<Record<string, DayWeather | null>>({})
+  const weatherInflight = new Set<string>()
+
+  function weatherKeyOf(dayIndexNum: number): { key: string; lat: number; lng: number; date: string } | null {
+    const t = trip.value
+    const d = t?.days[dayIndexNum]
+    const s = d?.stops[d.stops.length - 1]
+    if (!t || !s) return null
+    const date = ymd(dateOfDay(t.startDate, dayIndexNum))
+    return { key: `${s.lat.toFixed(2)},${s.lng.toFixed(2)},${date}`, lat: s.lat, lng: s.lng, date }
+  }
+
+  /** 当天天气；不在预报范围内或未取到时为 null */
+  function dayWeather(dayId: string): DayWeather | null {
+    const k = weatherKeyOf(dayIndex(dayId))
+    return k ? weatherCache[k.key] ?? null : null
+  }
+
+  /** 拉取当前路书在预报范围（今天起 16 天）内各天的天气；同一地点合并为一次请求 */
+  async function refreshWeather() {
+    const t = trip.value
+    if (!t) return
+    const today = todayStr()
+    const lastDay = ymd(dateOfDay(today, FORECAST_DAYS - 1))
+    const groups = new Map<string, { lat: number; lng: number; dates: string[]; keys: string[] }>()
+    t.days.forEach((_, i) => {
+      const k = weatherKeyOf(i)
+      if (!k || k.date < today || k.date > lastDay) return
+      if (k.key in weatherCache || weatherInflight.has(k.key)) return
+      const loc = `${k.lat.toFixed(2)},${k.lng.toFixed(2)}`
+      const g = groups.get(loc) ?? { lat: k.lat, lng: k.lng, dates: [], keys: [] }
+      g.dates.push(k.date)
+      g.keys.push(k.key)
+      groups.set(loc, g)
+    })
+    for (const g of groups.values()) {
+      g.keys.forEach((k) => weatherInflight.add(k))
+      const from = g.dates.reduce((a, b) => (a < b ? a : b))
+      const to = g.dates.reduce((a, b) => (a > b ? a : b))
+      try {
+        const list = await fetchForecast(g.lat, g.lng, from, to)
+        g.keys.forEach((k, i) => {
+          weatherCache[k] = list.find((w) => w.date === g.dates[i]) ?? null
+        })
+      } catch {
+        // 天气只是辅助信息，失败不打扰用户，下次打开路书再试
+      } finally {
+        g.keys.forEach((k) => weatherInflight.delete(k))
+      }
+    }
+  }
+
+  // 出发日期或各天终点变化后刷新天气（防抖）
+  let weatherTimer = 0
+  watch(
+    () => {
+      const t = trip.value
+      if (!t) return ''
+      return t.startDate + '|' + t.days.map((d) => {
+        const s = d.stops[d.stops.length - 1]
+        return s ? `${s.lat.toFixed(2)},${s.lng.toFixed(2)}` : '-'
+      }).join(';')
+    },
+    (sig) => {
+      if (!sig) return
+      window.clearTimeout(weatherTimer)
+      weatherTimer = window.setTimeout(() => void refreshWeather(), 800)
+    },
+  )
+
+  // ───────────────────────── 只读分享页 ─────────────────────────
+  /** 打开分享链接：载入路书为只读，不写服务端 */
+  function openShared(t: Trip, cfg: { amapKey: string; amapSecurityJsCode: string; defaultProvider: string }) {
+    readOnly.value = true
+    mapCfg.key = cfg.amapKey || ''
+    mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
+    hasAmapKey.value = !!mapCfg.key
+    mapCfg.provider = cfg.defaultProvider === 'amap' && mapCfg.key ? 'amap' : 'osm'
+    mapSvc.setProvider(mapCfg.provider)
+    trip.value = migrateTrip(t)
+    currentId.value = null
+    view.value = 'overview'
+    page.value = 'trip'
+    trip.value?.days.forEach((d) => touchLegs(d.id))
+  }
+
   // ───────────────────────── 导入 / 导出 ─────────────────────────
   function exportJson(): string {
     return JSON.stringify({ version: 3, exportedAt: new Date().toISOString(), trip: trip.value })
@@ -831,16 +939,17 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, legDistances, legDurations, legTolls, legFailed, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, readOnly, legDistances, legDurations, legTolls, legFailed, legPaths,
     tripSummaries,
     init: loadAll, notify, save, saveNow, reset,
     applyProvider, applyServerConfig, retryLegs,
     createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay, reorderDays,
-    addStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, setDepartTime, applyPicked,
+    addStop, insertStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, setDepartTime, applyPicked,
     openPicker, openStopEditor, closePicker, pickSearchResult,
     routePointsOf, originFromPrev,
     dayStats, schedules, dayCost, tripTotals, vehicle, setVehicle,
+    dayWeather, refreshWeather, openShared,
     exportJson, importJson,
   }
 })
