@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { defineStore } from 'pinia'
-import { api, getToken, setToken, type AuthUser } from '../services/api'
+import { api, getToken, isOfflineError, setToken, type AuthUser } from '../services/api'
+import { clearOffline, lastSnapshotUser, loadPending } from '../services/offline'
 
 /** 登录态：token 存 localStorage，刷新后通过 /api/me 恢复 */
 export const useAuthStore = defineStore('auth', () => {
@@ -12,9 +13,15 @@ export const useAuthStore = defineStore('auth', () => {
       try {
         const data = await api.me()
         user.value = data.user
-      } catch {
-        setToken(null)
-        user.value = null
+      } catch (e) {
+        // 断网：用本机缓存的用户继续离线查看；只有服务端明确拒绝（登录过期）才退出
+        const cached = isOfflineError(e) ? lastSnapshotUser() : null
+        if (cached) {
+          user.value = cached
+        } else {
+          if (!isOfflineError(e)) setToken(null)
+          user.value = null
+        }
       }
     }
     ready.value = true
@@ -33,11 +40,15 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function logout() {
+    const name = user.value?.username
+    const pendingCount = name ? Object.keys(loadPending(name)).length : 0
+    if (pendingCount && !window.confirm(`还有 ${pendingCount} 本路书的离线修改没有同步到服务器，退出后这些修改会丢失。确定退出？`)) return
     try {
       await api.logout()
-    } catch { /* 会话可能已过期，忽略 */ }
+    } catch { /* 会话可能已过期或离线，忽略 */ }
     setToken(null)
     user.value = null
+    if (name) await clearOffline(name) // 不在这台设备上留下路书数据
   }
 
   return { user, ready, init, login, register, logout }

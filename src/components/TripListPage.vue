@@ -3,6 +3,7 @@ import { ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useTripStore } from '../stores/trip'
 import { todayStr } from '../services/geo'
+import { canInstall, isStandalone, promptInstall } from '../services/pwa'
 
 const store = useTripStore()
 const auth = useAuthStore()
@@ -113,6 +114,9 @@ function getTripTheme(id: string): CoverTheme {
                 <div class="popover-divider"></div>
                 <button v-if="auth.user?.isAdmin" class="popover-item" @click="store.adminOpen = true; showUserMenu = false">
                   ⚙️ 管理后台
+                </button>
+                <button v-if="canInstall && !isStandalone()" class="popover-item" @click="promptInstall(); showUserMenu = false">
+                  📲 安装到桌面（可离线查看）
                 </button>
                 <button class="popover-item danger-item" @click="auth.logout()">
                   🚪 退出登录
