@@ -110,27 +110,41 @@ export interface ShareInfo {
   createdAt?: number
 }
 
-/** 上传分享视频（XHR 以便显示上传进度）；同一路书重复上传会替换视频、沿用链接 */
-function uploadShareVideo(tripId: string, blob: Blob, onProgress?: (ratio: number) => void): Promise<ShareInfo> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest()
-    xhr.open('PUT', `/api/trips/${encodeURIComponent(tripId)}/share/video`)
-    const token = getToken()
-    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
-    xhr.setRequestHeader('Content-Type', blob.type.includes('mp4') ? 'video/mp4' : 'video/webm')
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total)
-    }
-    xhr.onload = () => {
-      let data: any = null
+/**
+ * 上传分享视频：按 768KB 分片依次上传（反向代理常限制单个请求 1MB），每片失败重试 2 次。
+ * 同一路书重复上传会替换视频、沿用链接。
+ */
+async function uploadShareVideo(tripId: string, blob: Blob, onProgress?: (ratio: number) => void): Promise<ShareInfo> {
+  const id = encodeURIComponent(tripId)
+  const init = await request('POST', `/api/trips/${id}/share/upload`)
+  const chunkSize: number = init.chunkSize || 768 * 1024
+  const total = Math.max(1, Math.ceil(blob.size / chunkSize))
+  for (let i = 0; i < total; i++) {
+    const part = blob.slice(i * chunkSize, Math.min(blob.size, (i + 1) * chunkSize))
+    let lastErr: unknown = null
+    for (let attempt = 0; attempt < 3; attempt++) {
       try {
-        data = JSON.parse(xhr.responseText)
-      } catch { /* 非 JSON（如反向代理的 413 页面） */ }
-      if (xhr.status >= 200 && xhr.status < 300) resolve(data)
-      else if (xhr.status === 413) reject(new Error('视频太大，服务器拒收（请联系管理员调大上传限制）'))
-      else reject(new Error(data?.error || `上传失败（HTTP ${xhr.status}）`))
+        const headers: Record<string, string> = { 'Content-Type': 'application/octet-stream' }
+        const token = getToken()
+        if (token) headers.Authorization = `Bearer ${token}`
+        const res = await fetch(`/api/trips/${id}/share/upload/${init.uploadId}/${i}`, { method: 'PUT', headers, body: part })
+        if (res.ok) {
+          lastErr = null
+          break
+        }
+        let msg = ''
+        try {
+          msg = (await res.json())?.error || ''
+        } catch { /* 非 JSON（如反向代理的错误页） */ }
+        lastErr = new Error(msg || `上传失败（HTTP ${res.status}）`)
+        if (res.status < 500 && res.status !== 429) break // 业务错误不重试
+      } catch {
+        lastErr = new NetworkError()
+      }
+      await new Promise((r) => setTimeout(r, 800 * (attempt + 1)))
     }
-    xhr.onerror = () => reject(new Error('网络错误，视频上传失败'))
-    xhr.send(blob)
-  })
+    if (lastErr) throw lastErr
+    onProgress?.((i + 1) / total)
+  }
+  return request('POST', `/api/trips/${id}/share/upload/${init.uploadId}/finish`, { size: blob.size })
 }

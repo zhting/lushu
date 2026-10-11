@@ -247,41 +247,104 @@ app.get('/api/trips/:id/share', auth, (req, res) => {
   res.json(shareInfo(shareTokenOf(req.user, req.params.id)))
 })
 
+// 分片上传：反向代理（如 Nginx 默认 client_max_body_size 1m）会拒收大请求，
+// 视频按小于 1MB 的分片依次上传，服务端追加到临时文件，最后校验格式并登记分享。
+const CHUNK_MAX_BYTES = 1000 * 1024
+const uploads = new Map() // uploadId -> { username, tripId, tmp, size, next, at }
+
+function dropUpload(id) {
+  const u = uploads.get(id)
+  if (u) fs.rm(u.tmp, { force: true }, () => {})
+  uploads.delete(id)
+}
+
+// 清理 1 小时内没有完成的上传
+setInterval(() => {
+  const now = Date.now()
+  for (const [id, u] of uploads) if (now - u.at > 3600_000) dropUpload(id)
+}, 10 * 60_000).unref()
+
+app.post('/api/trips/:id/share/upload', auth, (req, res) => {
+  if (!userTrips(req.user).some((e) => e.id === req.params.id)) return fail(res, 404, '路书不存在')
+  if (!shareTokenOf(req.user, req.params.id)) {
+    const count = Object.values(db.shares).filter((sh) => sh.username === req.user).length
+    if (count >= VIDEO_MAX_PER_USER) return fail(res, 400, `最多同时分享 ${VIDEO_MAX_PER_USER} 个视频，请先关闭不用的链接`)
+  }
+  // 同一用户同时只保留一个进行中的上传
+  for (const [id, u] of uploads) if (u.username === req.user) dropUpload(id)
+  fs.mkdirSync(VIDEO_DIR, { recursive: true })
+  const uploadId = crypto.randomBytes(12).toString('hex')
+  uploads.set(uploadId, { username: req.user, tripId: req.params.id, tmp: path.join(VIDEO_DIR, `${uploadId}.part`), size: 0, next: 0, at: Date.now() })
+  res.json({ uploadId, chunkSize: 768 * 1024 })
+})
+
 app.put(
-  '/api/trips/:id/share/video',
+  '/api/trips/:id/share/upload/:uploadId/:index',
   auth,
-  express.raw({ type: Object.keys(VIDEO_TYPES), limit: VIDEO_MAX_BYTES }),
+  express.raw({ type: 'application/octet-stream', limit: CHUNK_MAX_BYTES }),
   (req, res) => {
-    if (!userTrips(req.user).some((e) => e.id === req.params.id)) return fail(res, 404, '路书不存在')
+    const u = uploads.get(req.params.uploadId)
+    if (!u || u.username !== req.user || u.tripId !== req.params.id) return fail(res, 404, '上传已失效，请重新上传')
+    const index = Number(req.params.index)
     const buf = req.body
-    if (!Buffer.isBuffer(buf) || !buf.length) return fail(res, 400, '没有收到视频，请重新录制')
-    const mime = sniffVideo(buf)
-    if (!mime) return fail(res, 400, '只支持 MP4 或 WebM 视频')
-
-    let token = shareTokenOf(req.user, req.params.id)
-    if (!token) {
-      const count = Object.values(db.shares).filter((sh) => sh.username === req.user).length
-      if (count >= VIDEO_MAX_PER_USER) return fail(res, 400, `最多同时分享 ${VIDEO_MAX_PER_USER} 个视频，请先关闭不用的链接`)
-      token = crypto.randomBytes(16).toString('base64url')
+    if (!Buffer.isBuffer(buf) || !buf.length) return fail(res, 400, '分片为空')
+    if (index === u.next - 1) return res.json({ ok: true, size: u.size }) // 重试已收到的分片
+    if (index !== u.next) return fail(res, 409, '分片顺序不对，请重新上传')
+    if (u.size + buf.length > VIDEO_MAX_BYTES) {
+      dropUpload(req.params.uploadId)
+      return fail(res, 413, '视频超过 300MB，请缩短后再分享')
     }
-
-    fs.mkdirSync(VIDEO_DIR, { recursive: true })
-    const file = `${crypto.randomBytes(16).toString('hex')}.${VIDEO_TYPES[mime]}`
-    const tmp = path.join(VIDEO_DIR, file + '.tmp')
     try {
-      fs.writeFileSync(tmp, buf)
-      fs.renameSync(tmp, path.join(VIDEO_DIR, file))
+      fs.appendFileSync(u.tmp, buf)
     } catch {
-      fs.rm(tmp, { force: true }, () => {})
+      dropUpload(req.params.uploadId)
       return fail(res, 500, '视频保存失败，请稍后重试')
     }
-    const old = db.shares[token]?.file
-    db.shares[token] = { username: req.user, tripId: req.params.id, file, mime, size: buf.length, createdAt: Date.now() }
-    if (old && old !== file) removeVideoFile(old)
-    saveDb()
-    res.json(shareInfo(token))
+    u.size += buf.length
+    u.next++
+    u.at = Date.now()
+    res.json({ ok: true, size: u.size })
   },
 )
+
+app.post('/api/trips/:id/share/upload/:uploadId/finish', auth, (req, res) => {
+  const u = uploads.get(req.params.uploadId)
+  if (!u || u.username !== req.user || u.tripId !== req.params.id) return fail(res, 404, '上传已失效，请重新上传')
+  if (Number(req.body?.size) !== u.size) {
+    dropUpload(req.params.uploadId)
+    return fail(res, 400, '视频没有完整上传，请重试')
+  }
+  let head
+  try {
+    const fd = fs.openSync(u.tmp, 'r')
+    head = Buffer.alloc(16)
+    fs.readSync(fd, head, 0, 16, 0)
+    fs.closeSync(fd)
+  } catch {
+    dropUpload(req.params.uploadId)
+    return fail(res, 400, '没有收到视频，请重新录制')
+  }
+  const mime = sniffVideo(head)
+  if (!mime) {
+    dropUpload(req.params.uploadId)
+    return fail(res, 400, '只支持 MP4 或 WebM 视频')
+  }
+  let token = shareTokenOf(req.user, u.tripId)
+  if (!token) token = crypto.randomBytes(16).toString('base64url')
+  const file = `${crypto.randomBytes(16).toString('hex')}.${VIDEO_TYPES[mime]}`
+  try {
+    fs.renameSync(u.tmp, path.join(VIDEO_DIR, file))
+  } catch {
+    dropUpload(req.params.uploadId)
+    return fail(res, 500, '视频保存失败，请稍后重试')
+  }
+  uploads.delete(req.params.uploadId)
+  const old = db.shares[token]?.file
+  db.shares[token] = { username: req.user, tripId: u.tripId, file, mime, size: u.size, createdAt: Date.now() }
+  if (old && old !== file) removeVideoFile(old)
+  saveDb()
+  res.json(shareInfo(token))
+})
 
 app.delete('/api/trips/:id/share', auth, (req, res) => {
   revokeShares(req.user, req.params.id)
@@ -318,6 +381,15 @@ if (fs.existsSync(DIST)) {
   app.use(express.static(DIST))
   app.get(/^\/(?!api\/).*/, (req, res) => res.sendFile(path.join(DIST, 'index.html')))
 }
+
+// 接口错误统一返回 JSON（如请求体过大、JSON 格式错误），前端才能显示可读的提示
+app.use((err, req, res, next) => {
+  if (res.headersSent) return next(err)
+  if (err?.type === 'entity.too.large') return fail(res, 413, '上传内容太大')
+  if (err?.type === 'entity.parse.failed') return fail(res, 400, '请求格式不正确')
+  console.error('[lushu]', err)
+  fail(res, err?.status || 500, '服务器出错，请稍后重试')
+})
 
 app.listen(PORT, () => {
   console.log(`[lushu] 服务端已启动: http://localhost:${PORT}`)

@@ -5393,3 +5393,18 @@ body.is-recording-video .toast {
 .ai-row-cont {
   color: #0284c7;
 }
+
+/* 车行信息带过路费时变长：导航按钮保持一行，放不下就整体换到下一行 */
+.tl-leg-pill {
+  flex-wrap: wrap;
+  row-gap: 2px;
+}
+
+.nav-btn {
+  white-space: nowrap;
+  flex: none;
+}
+
+.nav-menu {
+  flex: none;
+}
