@@ -24,7 +24,7 @@ const step = ref<Step>('input')
 const text = ref('')
 const hints = ref('')
 const startDate = ref(todayStr())
-const images = ref<{ url: string; name: string }[]>([])
+const images = ref<{ url: string; name: string; file: File }[]>([])
 const error = ref('')
 const fileInput = ref<HTMLInputElement | null>(null)
 
@@ -51,13 +51,13 @@ const unmatchedCount = computed(() => days.value.flat().filter((r) => r.pick < 0
 
 const MAX_IMAGES = 4
 
-/** 压缩截图：长边不超过 1600px，转 JPEG，减小上传体积 */
-function compressImage(file: File): Promise<string> {
+/** 压缩截图：长边不超过 maxSide，转 JPEG */
+function compressImage(file: File, maxSide = 1280, quality = 0.72): Promise<string> {
   return new Promise((resolve, reject) => {
     const img = new Image()
     const url = URL.createObjectURL(file)
     img.onload = () => {
-      const scale = Math.min(1, 1600 / Math.max(img.width, img.height))
+      const scale = Math.min(1, maxSide / Math.max(img.width, img.height))
       const c = document.createElement('canvas')
       c.width = Math.round(img.width * scale)
       c.height = Math.round(img.height * scale)
@@ -66,7 +66,7 @@ function compressImage(file: File): Promise<string> {
       ctx.fillRect(0, 0, c.width, c.height)
       ctx.drawImage(img, 0, 0, c.width, c.height)
       URL.revokeObjectURL(url)
-      resolve(c.toDataURL('image/jpeg', 0.85))
+      resolve(c.toDataURL('image/jpeg', quality))
     }
     img.onerror = () => {
       URL.revokeObjectURL(url)
@@ -74,6 +74,28 @@ function compressImage(file: File): Promise<string> {
     }
     img.src = url
   })
+}
+
+/**
+ * 整个请求要控制在 1MB 以内（反向代理常见上限）：截图合计不超过约 850KB，
+ * 超出时按「先降质量、再缩尺寸」逐级重压，文字依然清晰可读。
+ */
+const IMAGE_BUDGET = 850 * 1024
+const COMPRESS_STEPS: [number, number][] = [
+  [1280, 0.72],
+  [1280, 0.6],
+  [1100, 0.6],
+  [960, 0.55],
+  [800, 0.5],
+]
+async function imagesWithinBudget(): Promise<string[]> {
+  let urls = images.value.map((i) => i.url)
+  for (const [side, q] of COMPRESS_STEPS) {
+    if (urls.reduce((a, u) => a + u.length, 0) <= IMAGE_BUDGET) return urls
+    urls = await Promise.all(images.value.map((i) => compressImage(i.file, side, q)))
+  }
+  if (urls.reduce((a, u) => a + u.length, 0) > IMAGE_BUDGET) throw new Error('截图太大或太多，请减少截图数量后再试')
+  return urls
 }
 
 async function onFiles(e: Event) {
@@ -87,7 +109,7 @@ async function onFiles(e: Event) {
     }
     if (!f.type.startsWith('image/')) continue
     try {
-      images.value.push({ url: await compressImage(f), name: f.name })
+      images.value.push({ url: await compressImage(f), name: f.name, file: f })
     } catch (err: any) {
       store.notify(err?.message || '图片读取失败', 'error')
     }
@@ -100,7 +122,7 @@ async function generate() {
   try {
     const res = await api.aiParse({
       text: text.value.trim(),
-      images: images.value.map((i) => i.url),
+      images: await imagesWithinBudget(),
       startDate: startDate.value,
       hints: hints.value.trim(),
     })
