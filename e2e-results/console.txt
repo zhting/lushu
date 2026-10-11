@@ -1,0 +1,179 @@
+Traceback (most recent call last):
+  File "/home/runner/work/lushu/lushu/e2e/live_test.py", line 15, in step
+    info = fn()
+           ^^^^
+  File "/home/runner/work/lushu/lushu/e2e/live_test.py", line 144, in share_video
+    page.wait_for_selector('.share-sheet .share-link-input, .upload-progress', timeout=5000)
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/sync_api/_generated.py", line 8182, in wait_for_selector
+    self._sync(
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/_impl/_sync_base.py", line 115, in _sync
+    return task.result()
+           ^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/_impl/_page.py", line 422, in wait_for_selector
+    return await self._main_frame.wait_for_selector(**locals_to_params(locals()))
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/_impl/_frame.py", line 369, in wait_for_selector
+    await self._channel.send(
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/_impl/_connection.py", line 69, in send
+    return await self._connection.wrap_api_call(
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/hostedtoolcache/Python/3.12.15/x64/lib/python3.12/site-packages/playwright/_impl/_connection.py", line 559, in wrap_api_call
+    raise rewrite_error(error, f"{parsed_st['apiName']}: {error}") from None
+playwright._impl._errors.TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.
+Call log:
+  - waiting for locator(".share-sheet .share-link-input, .upload-progress") to be visible
+
+[OK] 打开首页 / PWA 文件: {'status': 200, 'manifest': 200, 'sw_js': 200, 'title': '小鹿路书 · 自驾行程规划'}
+[OK] 注册测试账号 / 读取配置: {'user': 'e2etest_10110159', 'provider': 'amap', 'hasAmapKey': True, 'hasAi': False, 'aiVision': False}
+[OK] 载入示例 → 车程、到达时间、费用: {'day_plan': '出发 | ☁️ | 阴6~19℃ | 驾驶 4小时52分 · 294 km | 预计 16:52 到达 | 油费约 ¥176 | 过路费 ¥86 | 途中停留 4小时', 'legs': 3, 'stop_times': ['08:00 出发', '09:20 到 · 停留 2小时30分', '14:31 到 · 停留 1小时30分', '16:52 到'], 'provider': 'amap'}
+[OK] 天气（Open-Meteo）: ☁️ 阴6~19℃
+[OK] 一键导航链接: ['https://uri.amap.com/navigation?from=116.397428%2C39.90923%2C%E5%A4%A9%E5%AE%89%E9%97%A8%E5%B9%BF%E5%9C%BA&to=116.024067%2C40.354188%2C%E5%85%AB%E8%BE%BE%E5%B2%AD%E9%95%BF%E5%9F%8E&mode=car&policy=1&src=lushu&coordinate=gaode&callnative=1', 'https://api.map.baidu.com/direction?origin=latlng%3A39.90923%2C116.397428%7Cname%3A%E5%A4%A9%E5%AE%89%E9%97%A8%E5%B9%BF%E5%9C%BA&destination=latlng%3A40.354188%2C116.024067%7Cname%3A%E5%85%AB%E8%BE%BE%E5%B2%AD%E9%95%BF%E5%9F%8E&mode=driving&coord_type=gcj02&output=html&src=webapp.lushu']
+[OK] 地图渲染: {'leaflet': 0, 'leaflet_tiles_loaded': 0, 'amap': 1}
+[OK] 沿途补给（加油站）: {'count': 34, 'first': ['中国石化宣武门加油站 沿途第 0 km · 离路线 1.9 km · 宣武门东大街(宣武门地铁站C东南口步行330米) ＋ 加入', '中国石化加油站(北京站) 沿途第 0 km · 离路线 2.2 km · 北京站西街3号(北京站地铁站A西北口步行360米) ＋ 加入', '中国石化崇文门加油站 沿途第 0 km · 离路线 2.3 km · 崇文门东大街甲22号(崇文门地铁站F东北口步行280米) ＋ 加入', '中国石油北汽宣武门加油站 沿途第 1 km · 离路线 2.3 km · 北京城区宣武门西大街2号楼东侧(宣武门地铁站H西南口步行90米) ＋ 加入', '中国石化景山加油站 沿途第 2 km · 离路线 894 米 · 景山后街7号 ＋ 加入'], 'stops_before_after': [4, 5]}
+[OK] 终点附近住宿: 颜玉宾馆 | 距终点 178 米 · 永义南街燕赐福地5区对面 | ＋ 加入 | 昌盛宾馆(永义北大街店) | 距终点 187 米 · 燕赐福地5门南100米 | ＋ 加入 | 张北帝豪快捷酒店(张家口) | 距终点 199 米 · 永义北大街燕赐福地小区 | ＋ 加入 | 张北华夏宾馆 | 距终点 203 米 · 永春南大街17-3号 | ＋ 加入 |  | 加入后放在当天最后，作为当晚住宿。
+[OK] 总览合计与每日对比: {'tiles': '总里程 | 880 km | 驾驶时长 | 14小时38分 | 油费（估） | ¥528 | 过路费 | ¥219', 'bars': 'D1 | 301 km · 5小时7分 | D2 | 301 km · 4小时35分 | D3 | 277 km · 4小时56分', 'foot': '合计约 ¥747。 油费按 8 L/100km、7.5 元/L 估算，可点右上「编辑」修改。'}
+[OK] 导出 GPX / 日历 / 长图: {'GPX': 534970, '日历': 2144, '长图': 2514075}
+[FAIL] 录制并分享视频（上传到服务器）: Page.wait_for_selector: Timeout 5000ms exceeded.
+Call log:
+  - waiting for locator(".share-sheet .share-link-input, .upload-progress") to be visible
+
+[OK] PWA 离线打开路书: {'sw_active': True, 'banner': '离线查看中，数据截至 10-11 09:59。 修改会先存在本机，联网后自动同步；搜索地点、新线路和天气需要联网。', 'day_plan': '出发 | 驾驶 5小时7分 · 301 km | 预计 17:27 到达 | 油费约 ¥181 | 过路费 ¥86 | 途中停留 4小时20分', 'pending_after_open': 0}
+[OK] AI 生成入口: 管理员还没有配置 AI 服务。  请联系管理员在后台开启。
+[OK] 清理测试数据: {'deleted': 1, 'left_on_server': 0}
+[OK] 手机尺寸单日页: 0
+{
+  "base": "https://lushu.tangletang.top",
+  "started": "2026-10-11 01:59:37",
+  "steps": [
+    {
+      "step": "打开首页 / PWA 文件",
+      "ok": true,
+      "sec": 3.6,
+      "info": {
+        "status": 200,
+        "manifest": 200,
+        "sw_js": 200,
+        "title": "小鹿路书 · 自驾行程规划"
+      }
+    },
+    {
+      "step": "注册测试账号 / 读取配置",
+      "ok": true,
+      "sec": 1.6,
+      "info": {
+        "user": "e2etest_10110159",
+        "provider": "amap",
+        "hasAmapKey": true,
+        "hasAi": false,
+        "aiVision": false
+      }
+    },
+    {
+      "step": "载入示例 → 车程、到达时间、费用",
+      "ok": true,
+      "sec": 14.9,
+      "info": {
+        "day_plan": "出发 | ☁️ | 阴6~19℃ | 驾驶 4小时52分 · 294 km | 预计 16:52 到达 | 油费约 ¥176 | 过路费 ¥86 | 途中停留 4小时",
+        "legs": 3,
+        "stop_times": [
+          "08:00 出发",
+          "09:20 到 · 停留 2小时30分",
+          "14:31 到 · 停留 1小时30分",
+          "16:52 到"
+        ],
+        "provider": "amap"
+      }
+    },
+    {
+      "step": "天气（Open-Meteo）",
+      "ok": true,
+      "sec": 0.0,
+      "info": "☁️ 阴6~19℃"
+    },
+    {
+      "step": "一键导航链接",
+      "ok": true,
+      "sec": 0.0,
+      "info": [
+        "https://uri.amap.com/navigation?from=116.397428%2C39.90923%2C%E5%A4%A9%E5%AE%89%E9%97%A8%E5%B9%BF%E5%9C%BA&to=116.024067%2C40.354188%2C%E5%85%AB%E8%BE%BE%E5%B2%AD%E9%95%BF%E5%9F%8E&mode=car&policy=1&src=lushu&coordinate=gaode&callnative=1",
+        "https://api.map.baidu.com/direction?origin=latlng%3A39.90923%2C116.397428%7Cname%3A%E5%A4%A9%E5%AE%89%E9%97%A8%E5%B9%BF%E5%9C%BA&destination=latlng%3A40.354188%2C116.024067%7Cname%3A%E5%85%AB%E8%BE%BE%E5%B2%AD%E9%95%BF%E5%9F%8E&mode=driving&coord_type=gcj02&output=html&src=webapp.lushu"
+      ]
+    },
+    {
+      "step": "地图渲染",
+      "ok": true,
+      "sec": 2.0,
+      "info": {
+        "leaflet": 0,
+        "leaflet_tiles_loaded": 0,
+        "amap": 1
+      }
+    },
+    {
+      "step": "沿途补给（加油站）",
+      "ok": true,
+      "sec": 10.4,
+      "info": {
+        "count": 34,
+        "first": [
+          "中国石化宣武门加油站 沿途第 0 km · 离路线 1.9 km · 宣武门东大街(宣武门地铁站C东南口步行330米) ＋ 加入",
+          "中国石化加油站(北京站) 沿途第 0 km · 离路线 2.2 km · 北京站西街3号(北京站地铁站A西北口步行360米) ＋ 加入",
+          "中国石化崇文门加油站 沿途第 0 km · 离路线 2.3 km · 崇文门东大街甲22号(崇文门地铁站F东北口步行280米) ＋ 加入",
+          "中国石油北汽宣武门加油站 沿途第 1 km · 离路线 2.3 km · 北京城区宣武门西大街2号楼东侧(宣武门地铁站H西南口步行90米) ＋ 加入",
+          "中国石化景山加油站 沿途第 2 km · 离路线 894 米 · 景山后街7号 ＋ 加入"
+        ],
+        "stops_before_after": [
+          4,
+          5
+        ]
+      }
+    },
+    {
+      "step": "终点附近住宿",
+      "ok": true,
+      "sec": 1.3,
+      "info": "颜玉宾馆 | 距终点 178 米 · 永义南街燕赐福地5区对面 | ＋ 加入 | 昌盛宾馆(永义北大街店) | 距终点 187 米 · 燕赐福地5门南100米 | ＋ 加入 | 张北帝豪快捷酒店(张家口) | 距终点 199 米 · 永义北大街燕赐福地小区 | ＋ 加入 | 张北华夏宾馆 | 距终点 203 米 · 永春南大街17-3号 | ＋ 加入 |  | 加入后放在当天最后，作为当晚住宿。"
+    },
+    {
+      "step": "总览合计与每日对比",
+      "ok": true,
+      "sec": 3.1,
+      "info": {
+        "tiles": "总里程 | 880 km | 驾驶时长 | 14小时38分 | 油费（估） | ¥528 | 过路费 | ¥219",
+        "bars": "D1 | 301 km · 5小时7分 | D2 | 301 km · 4小时35分 | D3 | 277 km · 4小时56分",
+        "foot": "合计约 ¥747。 油费按 8 L/100km、7.5 元/L 估算，可点右上「编辑」修改。"
+      }
+    },
+    {
+      "step": "导出 GPX / 日历 / 长图",
+      "ok": true,
+      "sec": 3.0,
+      "info": {
+        "GPX": 534970,
+        "日历": 2144,
+        "长图": 2514075
+      }
+    },
+    {
+      "step": "录制并分享视频（上传到服务器）",
+      "ok": false,
+      "sec": 69.6,
+      "error": "TimeoutError: Page.wait_for_selector: Timeout 5000ms exceeded.\nCall log:\n  - waiting for locator(\".share-sheet .share-link-input, .upload-progress\") to be visible\n",
+      "toasts": []
+    },
+    {
+      "step": "PWA 离线打开路书",
+      "ok": true,
+      "sec": 9.3,
+      "info": {
+        "sw_active": true,
+        "banner": "离线查看中，数据截至 10-11 09:59。 修改会先存在本机，联网后自动同步；搜索地点、新线路和天气需要联网。",
+        "day_plan": "出发 | 驾驶 5小时7分 · 301 km | 预计 17:27 到达 | 油费约 ¥181 | 过路费 ¥86 | 途中停留 4小时20分",
+        "pending_after_open": 0
+      }
+    },
+    {
+      "step": "AI 生成入口",
+      "ok": true,
+      "sec": 0.3,
+      "info": "管理员还没有配置 AI 服务。  请联系管理员在后台开启

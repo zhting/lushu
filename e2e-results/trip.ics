@@ -1,0 +1,48 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//lushu//roadbook//CN
+CALSCALE:GREGORIAN
+X-WR-CALNAME:示例 · 京北草原 3 日大环线
+BEGIN:VEVENT
+UID:day_mv36dtlq_1kp4f-trip_mv36dtlq_0yrke@lushu
+DTSTAMP:20261011T020016Z
+DTSTART:20261011T080000
+DTEND:20261011T172700
+SUMMARY:D1 天安门广场 → 张北草原（住宿）
+LOCATION:张北草原（住宿）
+DESCRIPTION:1. 天安门广场（08:00 出发）\n   ↓ 车行 4.5 km\n2. 
+ 中国石化宣武门加油站（08:18 到，停留 20分钟）\n   ↓ 
+ 车行 67.3 km\n3. 八达岭长城（09:55 到，停留 2小时30分）\n 
+   ↓ 车行 196 km\n4. 野狐岭要塞旅游区（15:06 到，停留 1小
+ 时30分）\n   ↓ 车行 33.9 km\n5. 张北草原（住宿）（17:27 
+ 到）\n全天驾驶约 5小时7分，301 km
+END:VEVENT
+BEGIN:VEVENT
+UID:day_mv36dtlq_228p1-trip_mv36dtlq_0yrke@lushu
+DTSTAMP:20261011T020016Z
+DTSTART:20261012T083000
+DTEND:20261012T173500
+SUMMARY:D2 张北草原（住宿） → 丰宁大滩草原（住宿）
+LOCATION:丰宁大滩草原（住宿）
+DESCRIPTION:1. 张北草原（住宿）（08:30 出发）\n   ↓ 车行 10
+ 8 km\n2. 桦皮岭景区（10:06 到，停留 1小时30分）\n   ↓ 车
+ 行 151 km\n3. 闪电湖湿地公园（13:32 到，停留 1小时30分）\
+ n   ↓ 车行 37.5 km\n4. 大汗行宫景区（15:55 到，停留 1小时
+ 30分）\n   ↓ 车行 5.6 km\n5. 丰宁大滩草原（住宿）（17:35 
+ 到）\n全天驾驶约 4小时35分，301 km
+END:VEVENT
+BEGIN:VEVENT
+UID:day_mv36dtlq_3ot78-trip_mv36dtlq_0yrke@lushu
+DTSTAMP:20261011T020016Z
+DTSTART:20261013T083000
+DTEND:20261013T162600
+SUMMARY:D3 丰宁大滩草原（住宿） → 天安门广场（环线终
+ 点）
+LOCATION:天安门广场（环线终点）
+DESCRIPTION:1. 丰宁大滩草原（住宿）（08:30 出发）\n   ↓ 车
+ 行 200 km\n2. 雁栖湖风景区（11:31 到，停留 2小时）\n   ↓ 
+ 车行 60.0 km\n3. 奥林匹克森林公园（14:31 到，停留 1小时
+ ）\n   ↓ 车行 17.3 km\n4. 天安门广场（环线终点）（16:26 
+ 到）\n全天驾驶约 4小时56分，277 km
+END:VEVENT
+END:VCALENDAR
