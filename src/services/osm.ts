@@ -8,37 +8,22 @@ export function getLeaflet(): any {
   return L
 }
 
-const LEAFLET_VERSION = '1.9.4'
-const CDN = `https://cdn.jsdelivr.net/npm/leaflet@${LEAFLET_VERSION}/dist`
-
-/** 动态加载 Leaflet（开源模式，无需任何 Key） */
+/**
+ * 加载 Leaflet（开源模式，无需任何 Key）。
+ * 打包进应用、按需分块加载：不依赖外部 CDN，PWA 离线时也能用。
+ */
 export function loadLeaflet(): Promise<any> {
   if (L) return Promise.resolve(L)
   if (loadPromise) return loadPromise
-  loadPromise = new Promise((resolve, reject) => {
-    const link = document.createElement('link')
-    link.rel = 'stylesheet'
-    link.href = `${CDN}/leaflet.css`
-    document.head.appendChild(link)
-
-    const script = document.createElement('script')
-    script.src = `${CDN}/leaflet.js`
-    script.async = true
-    script.onerror = () => {
+  loadPromise = Promise.all([import('leaflet'), import('leaflet/dist/leaflet.css')])
+    .then(([mod]) => {
+      L = (mod as any).default ?? mod
+      return L
+    })
+    .catch(() => {
       loadPromise = null
-      reject(new Error('Leaflet 脚本加载失败，请检查网络'))
-    }
-    script.onload = () => {
-      L = (window as any).L
-      if (!L) {
-        loadPromise = null
-        reject(new Error('Leaflet 加载异常'))
-        return
-      }
-      resolve(L)
-    }
-    document.head.appendChild(script)
-  })
+      throw new Error('Leaflet 加载失败，请检查网络后刷新')
+    })
   return loadPromise
 }
 

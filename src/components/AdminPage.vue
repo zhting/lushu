@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, ref } from 'vue'
 import { useTripStore } from '../stores/trip'
-import { api, type AuthUser, type MapConfig } from '../services/api'
+import { api, type AiAdminConfig, type AuthUser, type MapConfig } from '../services/api'
 
 const store = useTripStore()
 
@@ -13,6 +13,36 @@ const message = ref('')
 const error = ref('')
 const busy = ref(false)
 
+// AI 生成路书配置（Key 只回显末四位；留空保存表示不修改）
+const ai = ref<AiAdminConfig>({ baseUrl: '', model: '', vision: false, hasKey: false, keyHint: '' })
+const aiKeyInput = ref('')
+const aiBusy = ref(false)
+const aiMessage = ref('')
+const aiError = ref('')
+
+async function saveAi(clearKey = false) {
+  aiMessage.value = ''
+  aiError.value = ''
+  aiBusy.value = true
+  try {
+    const res = await api.adminSaveAi({
+      baseUrl: ai.value.baseUrl.trim(),
+      model: ai.value.model.trim(),
+      vision: ai.value.vision,
+      ...(clearKey ? { clearKey: true } : aiKeyInput.value.trim() ? { apiKey: aiKeyInput.value.trim() } : {}),
+    })
+    ai.value = res
+    aiKeyInput.value = ''
+    store.hasAi = !!(res.baseUrl && res.model && res.hasKey)
+    store.aiVision = res.vision
+    aiMessage.value = store.hasAi ? 'AI 配置已保存，所有用户可以使用「AI 生成路书」' : '已保存，但接口地址、模型、API Key 还没填全，AI 功能暂不可用'
+  } catch (e: any) {
+    aiError.value = e?.message || '保存失败'
+  } finally {
+    aiBusy.value = false
+  }
+}
+
 // 密钥显隐控制（默认隐藏防泄露）
 const showAmapKey = ref(false)
 const showSecurityCode = ref(false)
@@ -23,6 +53,7 @@ onMounted(async () => {
     amapKey.value = cfg.amapKey || ''
     amapSecurityJsCode.value = cfg.amapSecurityJsCode || ''
     defaultProvider.value = cfg.defaultProvider
+    ai.value = await api.adminGetAi()
     const u = await api.adminUsers()
     users.value = u.users || []
   } catch (e: any) {
@@ -255,6 +286,56 @@ function userInitial(name: string): string {
                 <span v-else class="btn-save-emoji">💾</span>
                 <span class="btn-save-label">{{ busy ? '正在同步保存…' : '保存全局地图配置' }}</span>
               </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 卡片：AI 生成路书 -->
+        <section class="admin-card">
+          <div class="admin-card-head">
+            <div class="head-icon-circle blue-icon">✨</div>
+            <div class="head-title-col">
+              <h2 class="card-main-title">AI 生成路书</h2>
+              <p class="card-sub-title">接入任意兼容 OpenAI 格式（/chat/completions）的大模型服务；API Key 只存在服务端，不会下发到浏览器</p>
+            </div>
+          </div>
+          <div class="admin-card-body">
+            <div class="admin-field">
+              <label class="field-title">接口地址 Base URL</label>
+              <div class="input-icon-box">
+                <span class="input-icon">🌐</span>
+                <input v-model="ai.baseUrl" class="admin-styled-input" placeholder="服务商文档里的 OpenAI 兼容地址，通常以 /v1 结尾" autocomplete="off" spellcheck="false" />
+              </div>
+              <p class="field-sub-note">系统会请求「Base URL + /chat/completions」。服务器需要能访问该地址。</p>
+            </div>
+            <div class="admin-field">
+              <label class="field-title">模型名称</label>
+              <div class="input-icon-box">
+                <span class="input-icon">🧠</span>
+                <input v-model="ai.model" class="admin-styled-input" placeholder="按服务商文档填写模型 ID" autocomplete="off" spellcheck="false" />
+              </div>
+            </div>
+            <div class="admin-field">
+              <label class="field-title">API Key <span v-if="ai.hasKey" class="label-pill">已配置 {{ ai.keyHint }}</span></label>
+              <div class="input-icon-box">
+                <span class="input-icon">🔑</span>
+                <input v-model="aiKeyInput" type="password" class="admin-styled-input" :placeholder="ai.hasKey ? '留空表示不修改' : '填写服务商提供的 API Key'" autocomplete="off" spellcheck="false" />
+              </div>
+            </div>
+            <div class="admin-field">
+              <label class="ai-vision-toggle">
+                <input v-model="ai.vision" type="checkbox" />
+                <span>模型支持识别图片（开启后用户可上传攻略截图）</span>
+              </label>
+            </div>
+            <div v-if="aiMessage" class="admin-banner success-banner"><span class="banner-icon">✓</span><span>{{ aiMessage }}</span></div>
+            <div v-if="aiError" class="admin-banner error-banner"><span class="banner-icon">✕</span><span>{{ aiError }}</span></div>
+            <div class="admin-action-row">
+              <button class="admin-save-btn" :disabled="aiBusy" @click="saveAi()">
+                <span class="btn-save-emoji">💾</span>
+                <span class="btn-save-label">{{ aiBusy ? '保存中…' : '保存 AI 配置' }}</span>
+              </button>
+              <button v-if="ai.hasKey" class="btn btn-secondary" :disabled="aiBusy" @click="saveAi(true)">清除 API Key</button>
             </div>
           </div>
         </section>

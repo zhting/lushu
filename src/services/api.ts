@@ -9,6 +9,18 @@ export function setToken(token: string | null) {
   else localStorage.removeItem(TOKEN_KEY)
 }
 
+/** 网络不通（断网、服务器不可达）：与服务端返回的业务错误区分开，离线逻辑据此降级 */
+export class NetworkError extends Error {
+  readonly offline = true
+  constructor() {
+    super('网络连接失败，请检查网络')
+  }
+}
+
+export function isOfflineError(e: unknown): boolean {
+  return !!(e as any)?.offline
+}
+
 async function request(method: string, url: string, body?: unknown): Promise<any> {
   const headers: Record<string, string> = {}
   const token = getToken()
@@ -18,7 +30,7 @@ async function request(method: string, url: string, body?: unknown): Promise<any
   try {
     res = await fetch(url, { method, headers, body: body !== undefined ? JSON.stringify(body) : undefined })
   } catch {
-    throw new Error('网络请求失败，请检查服务端是否已启动')
+    throw new NetworkError()
   }
   let data: any = null
   try {
@@ -39,6 +51,32 @@ export interface MapConfig {
   amapSecurityJsCode: string
   hasAmapKey: boolean
   defaultProvider: 'osm' | 'amap'
+  hasAi?: boolean
+  aiVision?: boolean
+}
+
+export interface AiAdminConfig {
+  baseUrl: string
+  model: string
+  vision: boolean
+  hasKey: boolean
+  keyHint: string
+}
+
+/** AI 识别 / 规划出的行程（地点尚未匹配坐标） */
+export interface AiPlanStop {
+  name: string
+  city: string
+  kind: 'waypoint' | 'scenic' | 'food' | 'fuel' | 'hotel'
+  stayMinutes: number | null
+  note: string
+}
+
+export interface AiPlan {
+  title: string
+  mode: 'extract' | 'plan'
+  days: { stops: AiPlanStop[] }[]
+  notes: string
 }
 
 export const api = {
@@ -58,6 +96,11 @@ export const api = {
   getShared: (token: string): Promise<{ mime: string; size: number; createdAt: number }> =>
     request('GET', `/api/public/share/${encodeURIComponent(token)}`),
   uploadShareVideo,
+  adminGetAi: (): Promise<AiAdminConfig> => request('GET', '/api/admin/ai'),
+  adminSaveAi: (cfg: Partial<AiAdminConfig> & { apiKey?: string; clearKey?: boolean }): Promise<AiAdminConfig> =>
+    request('PUT', '/api/admin/ai', cfg),
+  aiParse: (input: { text: string; images: string[]; startDate: string; hints?: string }): Promise<AiPlan> =>
+    request('POST', '/api/ai/parse', input),
 }
 
 export interface ShareInfo {

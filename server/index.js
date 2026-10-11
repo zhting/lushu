@@ -5,12 +5,15 @@ import path from 'node:path'
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { getDb, saveDb } from './db.js'
+import { aiAdminInfo, aiPublicInfo, allowAiCall, normalizeBaseUrl, parseTrip } from './ai.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const PORT = process.env.PORT || 3000
 
 const app = express()
-app.use(express.json({ limit: '5mb' }))
+const jsonParser = express.json({ limit: '5mb' })
+// AI 生成接口带截图，单独用更大的上限（见下方路由）
+app.use((req, res, next) => (req.path === '/api/ai/parse' ? next() : jsonParser(req, res, next)))
 
 const db = getDb()
 
@@ -48,6 +51,7 @@ function publicConfig() {
     amapSecurityJsCode: c.amapSecurityJsCode || '',
     hasAmapKey: !!c.amapKey,
     defaultProvider: c.defaultProvider === 'amap' && c.amapKey ? 'amap' : 'osm',
+    ...aiPublicInfo(c), // 只告诉前端「有没有 AI、能不能识图」，不下发 Key
   }
 }
 
@@ -114,6 +118,41 @@ app.put('/api/admin/config', auth, requireAdmin, (req, res) => {
   }
   saveDb()
   res.json(publicConfig())
+})
+
+// ───────────────────────── AI 生成路书 ─────────────────────────
+app.get('/api/admin/ai', auth, requireAdmin, (req, res) => {
+  res.json(aiAdminInfo(db.config))
+})
+
+app.put('/api/admin/ai', auth, requireAdmin, (req, res) => {
+  const { baseUrl, model, vision, apiKey, clearKey } = req.body || {}
+  try {
+    if (baseUrl !== undefined) db.config.aiBaseUrl = normalizeBaseUrl(baseUrl)
+  } catch (e) {
+    return fail(res, 400, e.message)
+  }
+  if (model !== undefined) db.config.aiModel = String(model).trim().slice(0, 100)
+  if (vision !== undefined) db.config.aiVision = !!vision
+  if (clearKey) db.config.aiApiKey = ''
+  else if (typeof apiKey === 'string' && apiKey.trim()) db.config.aiApiKey = apiKey.trim() // 留空表示不修改
+  saveDb()
+  res.json(aiAdminInfo(db.config))
+})
+
+app.post('/api/ai/parse', auth, express.json({ limit: '12mb' }), async (req, res) => {
+  const c = db.config
+  if (!aiPublicInfo(c).hasAi) return fail(res, 400, '管理员还没有配置 AI 服务')
+  if (!allowAiCall(req.user)) return fail(res, 429, 'AI 生成每小时最多 20 次，请稍后再试')
+  try {
+    const plan = await parseTrip(
+      { aiBaseUrl: c.aiBaseUrl, aiApiKey: c.aiApiKey, aiModel: c.aiModel, aiVision: c.aiVision },
+      req.body || {},
+    )
+    res.json(plan)
+  } catch (e) {
+    fail(res, 400, e?.message || 'AI 生成失败')
+  }
 })
 
 app.get('/api/admin/users', auth, requireAdmin, (req, res) => {

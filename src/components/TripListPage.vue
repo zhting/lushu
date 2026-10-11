@@ -3,11 +3,14 @@ import { ref } from 'vue'
 import { useAuthStore } from '../stores/auth'
 import { useTripStore } from '../stores/trip'
 import { todayStr } from '../services/geo'
+import { canInstall, isStandalone, promptInstall } from '../services/pwa'
+import AiCreateModal from './AiCreateModal.vue'
 
 const store = useTripStore()
 const auth = useAuthStore()
 const showCreateModal = ref(false)
 const showUserMenu = ref(false)
+const showAi = ref(false)
 const activeMenuTripId = ref<string | null>(null)
 const title = ref('')
 const startDate = ref(todayStr())
@@ -114,6 +117,9 @@ function getTripTheme(id: string): CoverTheme {
                 <button v-if="auth.user?.isAdmin" class="popover-item" @click="store.adminOpen = true; showUserMenu = false">
                   ⚙️ 管理后台
                 </button>
+                <button v-if="canInstall && !isStandalone()" class="popover-item" @click="promptInstall(); showUserMenu = false">
+                  📲 安装到桌面（可离线查看）
+                </button>
                 <button class="popover-item danger-item" @click="auth.logout()">
                   🚪 退出登录
                 </button>
@@ -164,17 +170,23 @@ function getTripTheme(id: string): CoverTheme {
             <h2 class="main-title">我的路书</h2>
             <span class="sub-count">共 {{ store.tripSummaries.length }} 个路书</span>
           </div>
-          <button class="sample-link-btn" @click="store.loadSample()">
-            载入示例行程
-          </button>
+          <div class="title-actions">
+            <button class="ai-entry-btn" @click="showAi = true">✨ AI 生成</button>
+            <button class="sample-link-btn" @click="store.loadSample()">
+              载入示例行程
+            </button>
+          </div>
         </div>
 
         <!-- 空列表提示 -->
         <div v-if="!store.tripSummaries.length" class="empty-roadtrip-card">
           <div class="empty-icon">🗺️</div>
           <div class="empty-title">还没有路书</div>
-          <p class="empty-desc">点击上方「创建新路书」开始规划第一次自驾之旅</p>
-          <button class="btn btn-primary btn-round" @click="openCreateModal">＋ 创建新路书</button>
+          <p class="empty-desc">点击上方「创建新路书」开始规划第一次自驾之旅，或把攻略交给 AI 整理</p>
+          <div class="empty-actions">
+            <button class="btn btn-primary btn-round" @click="openCreateModal">＋ 创建新路书</button>
+            <button class="btn btn-secondary btn-round" @click="showAi = true">✨ AI 生成路书</button>
+          </div>
         </div>
 
         <!-- 路书卡片网格 -->
@@ -248,5 +260,6 @@ function getTripTheme(id: string): CoverTheme {
         </div>
       </div>
     </div>
+    <AiCreateModal v-if="showAi" @close="showAi = false" />
   </div>
 </template>

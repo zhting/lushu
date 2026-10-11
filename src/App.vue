@@ -11,6 +11,7 @@ import MapView from './components/MapView.vue'
 import PlacePicker from './components/PlacePicker.vue'
 import ShareView from './components/ShareView.vue'
 import ShareSheet from './components/ShareSheet.vue'
+import OfflineBanner from './components/OfflineBanner.vue'
 
 const store = useTripStore()
 const auth = useAuthStore()
@@ -42,7 +43,7 @@ watch(
   async (u) => {
     if (u) {
       try {
-        await store.init()
+        await store.init(u)
       } catch (e: any) {
         store.notify(e?.message || '数据加载失败，请刷新重试', 'error')
       }
@@ -214,6 +215,9 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
         </main>
       </div>
     </template>
+
+    <!-- 离线提示 -->
+    <OfflineBanner v-if="auth.user" />
 
     <!-- 分享与导出 -->
     <ShareSheet v-if="showShareSheet && store.trip" @close="showShareSheet = false" />

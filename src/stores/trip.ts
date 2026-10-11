@@ -9,7 +9,9 @@ import { uid } from '../services/id'
 import { DAY_COLORS, KIND_META, VEHICLE_DEFAULTS } from '../constants'
 import { daySchedule, energyCost, parseClock, type DaySchedule } from '../services/schedule'
 import { SAMPLE_DAYS, SAMPLE_TITLE } from '../sample'
-import { api } from '../services/api'
+import { api, isOfflineError, type AuthUser, type MapConfig } from '../services/api'
+import * as offline from '../services/offline'
+import { online } from '../services/pwa'
 
 function emptyDay(): Day {
   return { id: uid('day'), departTime: '08:00', startAuto: true, stops: [], note: '' }
@@ -146,12 +148,29 @@ export const useTripStore = defineStore('trip', () => {
     securityJsCode: '',
   })
   const hasAmapKey = ref(false) // 服务端是否已配置高德 Key
+  const hasAi = ref(false) // 管理员是否已配置 AI 服务
+  const aiVision = ref(false) // AI 模型能否识别图片
   const adminOpen = ref(false) // 管理后台页（仅管理员可见入口）
   const mapOpen = ref(false) // 移动端：地图按需全屏展开（桌面端地图常驻，不受影响）
   const pickerOpen = ref(false) // 「添加节点」全屏选点页：上搜索、背后地图
   const pickerResults = ref<Poi[]>([]) // 选点页当前搜索结果（同步为地图上的编号标记）
   const pickerCity = ref('') // 选点页限定的城市（'' = 不限），打开选点页间保持上次选择
   const pickerKind = ref<StopKind>('waypoint') // 选点页新增节点时选定的类型
+  // 离线：offlineMode = 当前显示的是本机缓存（断网或服务器不可达）
+  const offlineMode = ref(false)
+  const offlineSyncedAt = ref(0) // 本机缓存最后一次与服务端同步的时间
+  const pendingCount = ref(0) // 等待同步的路书数
+  let username = ''
+  let synced: Record<string, number> = {} // 路书 id → 最后一次与服务端一致的 savedAt
+  let pending: Record<string, offline.PendingSave> = {}
+  let syncing = false
+  /** 路书 id → 最后一次保存（或加载）时的内容，没有变化就不重复保存 */
+  const savedJson = new Map<string, string>()
+  function rememberSaved(list: StoredTrip[]) {
+    savedJson.clear()
+    for (const e of list) savedJson.set(e.id, JSON.stringify(e.trip))
+  }
+
   // 分享视频：总览/弹窗发起「为分享录制」→ 地图组件录制 → 录完交回给分享弹窗上传
   const shareRecordSeq = ref(0)
   const recordingForShare = ref(false)
@@ -165,9 +184,9 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   // ───────────────────────── 服务端数据加载 / 持久化 ─────────────────────────
-  /** 登录后加载：服务端地图配置 + 当前用户的全部路书 */
-  async function loadAll() {
-    const cfg = await api.getConfig()
+  function applyConfig(cfg: MapConfig) {
+    hasAi.value = !!cfg.hasAi
+    aiVision.value = !!cfg.aiVision
     mapCfg.key = cfg.amapKey || ''
     mapCfg.securityJsCode = cfg.amapSecurityJsCode || ''
     hasAmapKey.value = cfg.hasAmapKey
@@ -177,12 +196,164 @@ export const useTripStore = defineStore('trip', () => {
     } catch {}
     mapCfg.provider = (cfg.defaultProvider as MapProvider) || 'osm'
     mapSvc.setProvider(mapCfg.provider)
-
-    const data = await api.getTrips()
-    savedTrips.list = (data.trips || [])
-      .filter((e: any) => e?.trip?.days?.length)
-      .map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
   }
+
+  /**
+   * 登录后加载：服务端地图配置 + 当前用户的全部路书。
+   * 网络不通时改用本机快照（离线模式）；本机还有没同步的修改时，以本机版本为准显示。
+   */
+  async function loadAll(user: AuthUser) {
+    username = user.username
+    synced = offline.loadSynced(username)
+    pending = offline.loadPending(username)
+    let cfg: MapConfig
+    let list: StoredTrip[]
+    try {
+      cfg = await api.getConfig()
+      const data = await api.getTrips()
+      list = (data.trips || []).filter((e: any) => e?.trip?.days?.length)
+      offlineMode.value = false
+      offlineSyncedAt.value = Date.now()
+      for (const e of list) synced[e.id] = e.savedAt
+      offline.saveSynced(username, synced)
+      offline.saveSnapshot({ user, config: cfg, trips: list, syncedAt: offlineSyncedAt.value })
+    } catch (e) {
+      if (!isOfflineError(e)) throw e
+      const snap = offline.loadSnapshot(username)
+      if (!snap) throw new Error('当前离线，这台设备上也没有缓存过路书，请联网后再打开')
+      cfg = snap.config
+      list = snap.trips
+      offlineMode.value = true
+      offlineSyncedAt.value = snap.syncedAt
+    }
+    applyConfig(cfg)
+    // 本机待同步的版本覆盖服务端 / 快照里的旧版本
+    for (const p of Object.values(pending)) {
+      const i = list.findIndex((x) => x.id === p.entry.id)
+      if (i >= 0) list.splice(i, 1, p.entry)
+      else list.unshift(p.entry)
+    }
+    pendingCount.value = Object.keys(pending).length
+    savedTrips.list = list.map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
+    rememberSaved(savedTrips.list)
+    if (!offlineMode.value && pendingCount.value) void syncPending()
+  }
+
+  /** 把快照里的路书列表更新为当前内容（离线也能看到最新修改） */
+  let snapTimer = 0
+  function persistSnapshot() {
+    if (!username) return
+    window.clearTimeout(snapTimer)
+    snapTimer = window.setTimeout(() => offline.updateSnapshotTrips(username, savedTrips.list), 300)
+  }
+
+  function addPending(entry: StoredTrip) {
+    const prev = pending[entry.id]
+    pending[entry.id] = { entry, base: prev ? prev.base : synced[entry.id] ?? null }
+    offline.savePending(username, pending)
+    pendingCount.value = Object.keys(pending).length
+  }
+
+  function markSynced(entry: StoredTrip) {
+    synced[entry.id] = entry.savedAt
+    offline.saveSynced(username, synced)
+    // 同步期间又有新的本地修改时保留待同步
+    if (pending[entry.id] && pending[entry.id].entry.savedAt <= entry.savedAt) {
+      delete pending[entry.id]
+      offline.savePending(username, pending)
+      pendingCount.value = Object.keys(pending).length
+    }
+  }
+
+  /**
+   * 联网后把离线修改推到服务端。
+   * 服务端那份在离线期间被别的设备改过（或删了）时不覆盖，而是另存一份「（离线修改）」副本，由用户自己取舍。
+   */
+  async function syncPending() {
+    if (syncing || !username || !Object.keys(pending).length) return
+    syncing = true
+    let pushed = 0
+    let copies = 0
+    try {
+      const server: StoredTrip[] = (await api.getTrips()).trips || []
+      for (const p of Object.values({ ...pending })) {
+        const srv = server.find((x) => x.id === p.entry.id)
+        const conflict = p.base != null && (!srv || srv.savedAt > p.base)
+        if (conflict) {
+          const id = uid('trip')
+          const copy: StoredTrip = {
+            id,
+            savedAt: Date.now(),
+            trip: { ...p.entry.trip, id, title: `${p.entry.trip.title}（离线修改）` },
+          }
+          await api.putTrip(copy)
+          synced[id] = copy.savedAt
+          delete pending[p.entry.id]
+          offline.savePending(username, pending)
+          copies++
+        } else {
+          await api.putTrip(p.entry)
+          markSynced(p.entry)
+          pushed++
+        }
+      }
+      pendingCount.value = Object.keys(pending).length
+      offline.saveSynced(username, synced)
+      // 重新拉取，让列表与服务端一致（含冲突副本）
+      const keepOpen = currentId.value
+      const data = await api.getTrips()
+      const list: StoredTrip[] = (data.trips || []).filter((e: any) => e?.trip?.days?.length)
+      for (const e of list) synced[e.id] = e.savedAt
+      offline.saveSynced(username, synced)
+      for (const p of Object.values(pending)) {
+        const i = list.findIndex((x) => x.id === p.entry.id)
+        if (i >= 0) list.splice(i, 1, p.entry)
+      }
+      savedTrips.list = list.map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
+      rememberSaved(savedTrips.list)
+      offlineMode.value = false
+      offlineSyncedAt.value = Date.now()
+      persistSnapshot()
+      if (copies) {
+        notify(`有 ${copies} 本路书在离线期间被其他设备改过，你的离线修改已另存为「（离线修改）」副本`, 'error')
+        if (keepOpen && !savedTrips.list.some((e) => e.id === keepOpen)) goHome()
+      } else if (pushed) {
+        notify(`已联网，${pushed} 本路书的离线修改已同步`)
+      }
+    } catch (e) {
+      if (!isOfflineError(e)) notify((e as any)?.message || '离线修改同步失败，稍后会再试', 'error')
+    } finally {
+      syncing = false
+    }
+  }
+
+  /** 恢复联网：重新拉取并同步离线修改 */
+  async function reconnect() {
+    if (!username) return
+    if (Object.keys(pending).length) await syncPending()
+    else if (offlineMode.value) {
+      try {
+        const cfg = await api.getConfig()
+        const data = await api.getTrips()
+        const list: StoredTrip[] = (data.trips || []).filter((e: any) => e?.trip?.days?.length)
+        for (const e of list) synced[e.id] = e.savedAt
+        offline.saveSynced(username, synced)
+        applyConfig(cfg)
+        // 正在看的那本保持当前对象，只更新列表
+        savedTrips.list = list.map((e: any) => ({ ...e, trip: migrateTrip(e.trip) }))
+        rememberSaved(savedTrips.list)
+        offlineMode.value = false
+        offlineSyncedAt.value = Date.now()
+        persistSnapshot()
+        trip.value?.days.forEach((d) => touchLegs(d.id))
+        void refreshWeather()
+      } catch {}
+    }
+  }
+
+  watch(online, (on) => {
+    if (on) void reconnect()
+  })
 
   /** 退出登录时清空会话内数据 */
   function reset() {
@@ -191,6 +362,12 @@ export const useTripStore = defineStore('trip', () => {
     page.value = 'home'
     view.value = 'overview'
     savedTrips.list.splice(0)
+    username = ''
+    savedJson.clear()
+    synced = {}
+    pending = {}
+    pendingCount.value = 0
+    offlineMode.value = false
     Object.keys(legDistances).forEach((k) => delete legDistances[k])
     Object.keys(legDurations).forEach((k) => delete legDurations[k])
     Object.keys(legTolls).forEach((k) => delete legTolls[k])
@@ -214,11 +391,34 @@ export const useTripStore = defineStore('trip', () => {
   function saveNow() {
     const t = trip.value
     if (!t || !currentId.value) return
+    // 内容没变（打开路书、线路算完等）不保存：避免无谓请求，离线时也不会凭空产生待同步
+    const json = JSON.stringify(t)
+    if (savedJson.get(currentId.value) === json) return
+    savedJson.set(currentId.value, json)
     const entry: StoredTrip = { id: currentId.value, savedAt: Date.now(), trip: t }
     const i = savedTrips.list.findIndex((e) => e.id === entry.id)
     if (i >= 0) savedTrips.list.splice(i, 1, entry)
     else savedTrips.list.unshift(entry)
-    api.putTrip(entry).catch((e) => notify(e?.message || '保存到服务端失败', 'error'))
+    persistSnapshot()
+    // 离线时先记到本机，联网后同步；已有待同步的也排队，避免先后顺序错乱
+    if (offlineMode.value || pending[entry.id]) {
+      addPending(JSON.parse(JSON.stringify(entry)))
+      if (!offlineMode.value) void syncPending()
+      return
+    }
+    api
+      .putTrip(entry)
+      .then(() => markSynced(entry))
+      .catch((e) => {
+        if (isOfflineError(e)) {
+          if (!offlineMode.value) notify('网络已断开：修改先保存在本机，联网后自动同步')
+          offlineMode.value = true
+          addPending(JSON.parse(JSON.stringify(entry)))
+        } else {
+          savedJson.delete(entry.id) // 保存失败，下次有改动时重试
+          notify(e?.message || '保存到服务端失败', 'error')
+        }
+      })
   }
 
   // ───────────────────────── 数据源管理（开源 OSM / 高德，管理员统一指定） ─────────────────────────
@@ -333,8 +533,13 @@ export const useTripStore = defineStore('trip', () => {
     const i = savedTrips.list.findIndex((e) => e.id === id)
     if (i < 0) return
     const title = savedTrips.list[i].trip.title
+    if (offlineMode.value) {
+      notify('离线时不能删除路书，请联网后再操作', 'error')
+      return
+    }
     if (!window.confirm(`删除「${title}」？此操作不可恢复。`)) return
     savedTrips.list.splice(i, 1)
+    persistSnapshot()
     api.deleteTrip(id).catch((e) => notify(e?.message || '服务端删除失败', 'error'))
     if (currentId.value === id) {
       trip.value = null
@@ -418,10 +623,11 @@ export const useTripStore = defineStore('trip', () => {
     const durations: number[] = []
     const tolls: (number | null)[] = []
     const path: [number, number][] = []
+    let prevNetwork = false
     try {
       for (let i = 1; i < pts.length; i++) {
-        // 逐段顺序请求并留出间隔，避免触发公共服务的频率限制；单段失败重试一次
-        if (i > 1) await new Promise((r) => setTimeout(r, 400))
+        // 逐段顺序请求并留出间隔，避免触发公共服务的频率限制（命中本机缓存的不用等）；单段失败重试一次
+        if (prevNetwork) await new Promise((r) => setTimeout(r, 400))
         let r: Awaited<ReturnType<typeof mapSvc.legRoute>>
         try {
           r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
@@ -430,6 +636,7 @@ export const useTripStore = defineStore('trip', () => {
           r = await mapSvc.legRoute(pts[i - 1], pts[i], mapCfg.key, mapCfg.securityJsCode)
         }
         if (legSeq[dayId] !== seqId) return // 期间又被编辑，丢弃过期结果
+        prevNetwork = !r.fromCache
         dists.push(r.distanceM)
         durations.push(r.durationS)
         tolls.push(r.tollsYuan)
@@ -469,6 +676,38 @@ export const useTripStore = defineStore('trip', () => {
     currentId.value = t.id
     view.value = t.days[0].id
     page.value = 'trip'
+    saveNow()
+  }
+
+  /**
+   * 用 AI 识别并经地图匹配后的地点生成路书。
+   * 每天的地点按顺序写入；从第二天起若首站与前一天末站同名（AI 重复写了），去掉以免和自动接续重复。
+   */
+  function createTripFromPlan(
+    title: string,
+    startDate: string,
+    days: { stops: { poi: Poi; kind: StopKind; stayMinutes: number | null; note: string }[] }[],
+  ) {
+    const list = days.filter((d) => d.stops.length)
+    if (!list.length) return
+    createTrip(title, startDate, list.length)
+    const t = trip.value!
+    list.forEach((d, i) => {
+      const stops: Stop[] = d.stops.map((x) => {
+        const st = mkStop(x.poi, x.kind)
+        st.stayMinutes = x.stayMinutes ?? defaultStay(x.kind)
+        st.note = x.note || ''
+        return st
+      })
+      const prevLast = i > 0 ? t.days[i - 1].stops[t.days[i - 1].stops.length - 1] : null
+      if (prevLast && stops[0] && Math.abs(prevLast.lng - stops[0].lng) < 5e-4 && Math.abs(prevLast.lat - stops[0].lat) < 5e-4) {
+        stops.shift()
+      }
+      t.days[i].stops = stops
+    })
+    syncContinuationStops(t)
+    view.value = t.days[0].id
+    t.days.forEach((d) => touchLegs(d.id))
     saveNow()
   }
 
@@ -942,11 +1181,11 @@ export const useTripStore = defineStore('trip', () => {
   }
 
   return {
-    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, shareRecordSeq, recordingForShare, pendingShareVideo, legDistances, legDurations, legTolls, legFailed, legPaths,
+    trip, currentId, page, savedTrips, view, pickTarget, toast, mapCfg, hasAmapKey, hasAi, aiVision, adminOpen, mapOpen, pickerOpen, pickerResults, pickerCity, pickerKind, offlineMode, offlineSyncedAt, pendingCount, shareRecordSeq, recordingForShare, pendingShareVideo, legDistances, legDurations, legTolls, legFailed, legPaths,
     tripSummaries,
-    init: loadAll, notify, save, saveNow, reset,
+    init: loadAll, notify, save, saveNow, reset, syncPending,
     applyProvider, applyServerConfig, retryLegs,
-    createTrip, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
+    createTrip, createTripFromPlan, loadSample, openTrip, goHome, goOverview, goDays, openMapOverview, closeMap, showDayOnMap, deleteTrip, deleteCurrentTrip,
     setTitle, setStartDate, setDayCount, deleteDay, reorderDays,
     addStop, insertStop, removeStop, moveStop, reorderStops, updateStopPlace, setStopName, setStay, setStopKind, toggleStartAuto, setDepartTime, applyPicked,
     openPicker, openStopEditor, closePicker, pickSearchResult,
