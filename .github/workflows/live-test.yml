@@ -1,0 +1,37 @@
+name: Live smoke test (temporary)
+
+# 临时工作流：只在 e2e/live-test 分支推送时运行，对线上站点做冒烟测试，结果提交回本分支。测试完成后删除该分支。
+on:
+  push:
+    branches:
+      - e2e/live-test
+
+permissions:
+  contents: write
+
+jobs:
+  live-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装 Playwright
+        run: |
+          pip install playwright==1.56.0 pillow
+          python -m playwright install --with-deps chromium
+      - name: 运行线上测试
+        env:
+          BASE: https://lushu.tangletang.top
+          OUT: e2e-results
+        run: python e2e/live_test.py 2>&1 | tee e2e-results-console.txt || true
+      - name: 提交结果
+        run: |
+          mkdir -p e2e-results && mv e2e-results-console.txt e2e-results/console.txt
+          git config user.name "live-test-bot"
+          git config user.email "live-test-bot@users.noreply.github.com"
+          git add -f e2e-results
+          git commit -m "e2e: 线上测试结果" || echo "nothing to commit"
+          git push origin HEAD:e2e/live-test
