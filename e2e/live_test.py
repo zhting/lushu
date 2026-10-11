@@ -157,8 +157,20 @@ with sync_playwright() as p:
             g.goto(share_url['url'], timeout=60000)
             g.wait_for_selector('video.share-video-player, .share-error', timeout=30000)
             meta = g.evaluate("fetch(location.pathname.replace('/s/', '/api/public/share/')).then(r => r.json())")
-            g.wait_for_timeout(4000)
-            dur = g.evaluate("(() => { const v = document.querySelector('video'); return v ? [v.readyState, v.duration] : null })()")
+            rng = g.evaluate("""(async () => { const t0 = performance.now();
+              const r = await fetch(location.pathname.replace('/s/', '/api/public/share/') + '/video', { headers: { Range: 'bytes=0-1023' } });
+              const b = await r.arrayBuffer();
+              return { status: r.status, contentRange: r.headers.get('content-range'), type: r.headers.get('content-type'), bytes: b.byteLength, ms: Math.round(performance.now() - t0) } })()""")
+            t0 = time.time()
+            try:
+                g.wait_for_function("(() => { const v = document.querySelector('video'); return v && v.readyState >= 1 })()", timeout=90000)
+            except Exception:
+                pass
+            load_sec = round(time.time() - t0, 1)
+            g.evaluate("(() => { const v = document.querySelector('video'); v.muted = true; v.currentTime = Math.min(5, (v.duration || 10) / 2) })()")
+            g.wait_for_timeout(3000)
+            dur = g.evaluate("(() => { const v = document.querySelector('video'); return v ? { readyState: v.readyState, duration: v.duration, currentTime: v.currentTime, error: v.error && v.error.code } : null })()")
+            dur = {'metadata_loaded_after_sec': load_sec, 'range_probe': rng, **(dur or {})}
             g.screenshot(path=f'{OUT}/07-guest-video.png')
             return {'public_meta_keys': sorted(meta.keys()), 'video_state_duration': dur, 'page_text': g.locator('body').inner_text().replace('\n', ' | ')}
         step('访客打开视频分享链接', guest)
