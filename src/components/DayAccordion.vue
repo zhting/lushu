@@ -4,6 +4,7 @@ import { useTripStore } from '../stores/trip'
 import { cityOfAddress, cnOrdinal, dateOfDay, fmtDate } from '../services/geo'
 import Draggable from 'vuedraggable'
 import DayEditor from './DayEditor.vue'
+import WeatherChip from './WeatherChip.vue'
 
 const store = useTripStore()
 const activeMenuDayId = ref<string | null>(null)
@@ -127,6 +128,7 @@ function handleAddDay() {
               <span v-if="routeLabel(i) && store.view !== d.id" class="day-route-summary">
                 📍 {{ routeLabel(i) }}
               </span>
+              <WeatherChip v-if="store.view !== d.id" :day-id="d.id" compact />
             </div>
 
             <div style="flex: 1"></div>

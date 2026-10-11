@@ -9,16 +9,32 @@ import DayAccordion from './components/DayAccordion.vue'
 import OverviewPanel from './components/OverviewPanel.vue'
 import MapView from './components/MapView.vue'
 import PlacePicker from './components/PlacePicker.vue'
+import ShareView from './components/ShareView.vue'
+import ShareSheet from './components/ShareSheet.vue'
 
 const store = useTripStore()
 const auth = useAuthStore()
 const showTripMoreMenu = ref(false)
+const showShareSheet = ref(false)
+
+// 为分享录制的视频生成后，重新打开分享弹窗上传
+watch(
+  () => store.pendingShareVideo,
+  (blob) => {
+    if (blob) showShareSheet.value = true
+  },
+)
+
+// 视频分享链接 /s/<token>：不走登录，直接渲染分享页（只有视频）
+const shareToken = typeof location !== 'undefined' ? location.pathname.match(/^\/s\/([A-Za-z0-9_-]+)\/?$/)?.[1] ?? '' : ''
 
 if (typeof window !== 'undefined') {
   ;(window as any).__trip_store__ = store
 }
 
-onMounted(() => auth.init())
+onMounted(() => {
+  if (!shareToken) auth.init()
+})
 
 // 登录后加载服务端配置与路书；退出时清空会话数据
 watch(
@@ -59,7 +75,8 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
 </script>
 
 <template>
-  <div class="app-root" @click="showTripMoreMenu = false">
+  <ShareView v-if="shareToken" :token="shareToken" />
+  <div v-else class="app-root" @click="showTripMoreMenu = false">
     <!-- 加载中状态 -->
     <template v-if="!auth.ready">
       <div class="center-screen"><p class="muted">小鹿路书加载中…</p></div>
@@ -96,7 +113,7 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
 
             <!-- 分享导出与三点菜单 -->
             <div class="header-right-actions" @click.stop>
-              <button class="glass-circle-btn" title="导出 JSON" @click="handleExport">
+              <button class="glass-circle-btn" title="分享与导出" @click="showShareSheet = true">
                 <svg class="share-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" />
                   <polyline points="16 6 12 2 8 6" />
@@ -114,6 +131,9 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
                 <div v-if="showTripMoreMenu" class="dropdown-popover header-popover">
                   <button class="popover-item" @click="store.goOverview(); showTripMoreMenu = false">
                     ✏️ 编辑行程设置
+                  </button>
+                  <button class="popover-item" @click="showShareSheet = true; showTripMoreMenu = false">
+                    🔗 分享与导出
                   </button>
                   <button class="popover-item" @click="handleExport(); showTripMoreMenu = false">
                     ⎘ 导出路书 JSON
@@ -194,6 +214,9 @@ function handleTabClick(tab: 'trip' | 'overview' | 'map') {
         </main>
       </div>
     </template>
+
+    <!-- 分享与导出 -->
+    <ShareSheet v-if="showShareSheet && store.trip" @close="showShareSheet = false" />
 
     <!-- Toast 提示 -->
     <div v-if="store.toast" class="toast" :class="store.toast.kind">{{ store.toast.text }}</div>

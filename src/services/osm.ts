@@ -121,3 +121,34 @@ export async function legRoute(
   legCache.set(key, out)
   return out
 }
+
+/**
+ * Overpass 查询（OSM 标签检索）。公共服务，有频率与超时限制，只适合测试与小流量。
+ * query 为 Overpass QL 主体（不含输出语句）。
+ */
+export async function overpass(query: string, limit = 60): Promise<Poi[]> {
+  const ql = `[out:json][timeout:25];(${query});out center ${limit};`
+  let res: Response
+  try {
+    res = await fetch('https://overpass-api.de/api/interpreter', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: 'data=' + encodeURIComponent(ql),
+    })
+  } catch {
+    throw new Error('沿途搜索（Overpass）请求失败，请检查网络')
+  }
+  if (res.status === 429 || res.status === 504) throw new Error('沿途搜索服务繁忙，请稍后再试')
+  if (!res.ok) throw new Error(`沿途搜索返回错误（HTTP ${res.status}）`)
+  const data = await res.json()
+  return (data?.elements ?? [])
+    .map((e: any) => {
+      const t = e.tags ?? {}
+      const lat = e.lat ?? e.center?.lat
+      const lng = e.lon ?? e.center?.lon
+      const name = t['name:zh'] || t.name || t.brand || t.operator || ''
+      const address = [t['addr:city'], t['addr:district'], t['addr:street'], t['addr:housenumber']].filter(Boolean).join('')
+      return { name, address: address || (t.brand && t.name ? t.brand : ''), lat: Number(lat), lng: Number(lng) }
+    })
+    .filter((p: Poi) => Number.isFinite(p.lat) && Number.isFinite(p.lng))
+}

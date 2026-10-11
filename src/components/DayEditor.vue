@@ -5,6 +5,9 @@ import { fmtDistance, fmtDuration, haversineKm } from '../services/geo'
 import { fmtClock, fmtStay, fmtYuan } from '../services/schedule'
 import { DRIVE_WARN_MINUTES, ENERGY_META, LATE_ARRIVAL_MINUTES } from '../constants'
 import Draggable from 'vuedraggable'
+import NavMenu from './NavMenu.vue'
+import SupplyPanel from './SupplyPanel.vue'
+import WeatherChip from './WeatherChip.vue'
 
 const props = defineProps<{ dayId: string }>()
 const store = useTripStore()
@@ -103,6 +106,7 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
           <span>出发</span>
           <input type="time" :value="day.departTime" @change="onDepartChange" />
         </label>
+        <WeatherChip :day-id="dayId" />
         <template v-if="day.stops.length > 1">
           <span v-if="!sched.durationsKnown" class="day-plan-stat muted">
             {{ store.legFailed[dayId] ? '车行线路未算出，暂无法推算到达时间' : '线路计算中…' }}
@@ -236,6 +240,7 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
                 <circle cx="16.5" cy="14.5" r="1.5"/>
               </svg>
               <span class="leg-info-text">{{ legText(j) }}</span>
+              <NavMenu :from="s" :to="day.stops[j + 1]" />
             </div>
           </div>
         </div>
@@ -249,5 +254,8 @@ function toggleStopMenu(stopId: string, e: MouseEvent) {
         <span class="btn-text">搜索添加新的目的地</span>
       </button>
     </div>
+
+    <!-- 沿途补给：终点住宿 / 加油 / 充电 / 服务区 -->
+    <SupplyPanel :day-id="day.id" />
   </div>
 </template>

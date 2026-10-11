@@ -4417,3 +4417,621 @@ body.is-recording-video .toast {
   color: #9a3412;
   font-weight: 600;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   第二批：导航 / 天气 / 沿途补给 / 分享与导出 / 只读分享页 / 长图
+   ───────────────────────────────────────────────────────────── */
+.error-text {
+  color: var(--danger);
+}
+
+.danger-text {
+  color: var(--danger) !important;
+}
+
+/* 一键导航 */
+.nav-menu {
+  position: relative;
+  display: inline-flex;
+  margin-left: 6px;
+}
+
+.nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 8px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--brand);
+  background: var(--brand-light);
+  border: none;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+}
+
+.nav-btn:hover {
+  background: #e0ebff;
+}
+
+.nav-btn-icon {
+  width: 12px;
+  height: 12px;
+}
+
+.nav-popover {
+  left: 0;
+  right: auto;
+  top: calc(100% + 4px);
+  min-width: 120px;
+}
+
+.nav-popover a {
+  text-decoration: none;
+}
+
+/* 天气 */
+.weather-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 12.5px;
+  color: var(--text);
+  white-space: nowrap;
+}
+
+.weather-chip.compact {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.weather-chip.weather-bad {
+  color: #9a3412;
+}
+
+/* 沿途补给 */
+.supply-panel {
+  margin: 14px 0 4px 36px;
+  padding: 10px 12px;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  background: #fcfdff;
+}
+
+.supply-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.supply-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+
+.supply-head .chip:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.supply-body {
+  margin-top: 8px;
+}
+
+.supply-status {
+  font-size: 12.5px;
+  padding: 4px 0;
+}
+
+.supply-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 320px;
+  overflow: auto;
+}
+
+.supply-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-subtle);
+}
+
+.supply-list li:last-child {
+  border-bottom: none;
+}
+
+.supply-item-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.supply-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-dark);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supply-meta {
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.supply-list .btn-mini {
+  flex: none;
+}
+
+.supply-foot {
+  margin: 6px 0 0;
+  font-size: 12px;
+}
+
+/* 分享与导出弹窗 */
+.modal-card.share-sheet {
+  max-width: 480px;
+}
+
+.share-section + .share-section {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line-subtle);
+}
+
+.share-section-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-dark);
+  margin-bottom: 4px;
+}
+
+.share-desc {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+}
+
+.share-link-row {
+  display: flex;
+  gap: 8px;
+}
+
+.share-link-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 7px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #f8fafc;
+  color: var(--text-dark);
+}
+
+.share-link-ops {
+  display: flex;
+  gap: 16px;
+  margin-top: 8px;
+  font-size: 12.5px;
+}
+
+.share-link-ops .btn-text-action {
+  border: none;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  color: var(--brand);
+  text-decoration: none;
+}
+
+.export-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.export-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  align-items: center;
+  padding: 10px 12px;
+  text-align: left;
+  font: inherit;
+  background: #f8fafc;
+  border: 1px solid var(--line-subtle);
+  border-radius: 12px;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.export-item:hover:not(:disabled) {
+  background: var(--brand-light);
+  border-color: #bfd4fb;
+}
+
+.export-item:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.export-icon {
+  grid-row: span 2;
+  font-size: 22px;
+}
+
+.export-name {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--text-dark);
+}
+
+.export-desc {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+/* 分享视频：上传进度与按钮 */
+.share-video-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.upload-progress {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+
+.upload-bar {
+  height: 8px;
+  background: #eef2f7;
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+.upload-bar span {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  border-radius: 4px;
+  transition: width 0.2s;
+}
+
+.share-link-ops {
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+/* 分享页：只有视频 */
+.share-video-page {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.share-video-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 14px 18px;
+}
+
+.share-video-logo {
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+}
+
+.share-video-brand {
+  font-weight: 700;
+  font-size: 16px;
+  color: #fff;
+}
+
+.share-video-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 16px 24px;
+}
+
+.share-video-player {
+  width: min(1100px, 100%);
+  aspect-ratio: 16 / 9;
+  background: #000;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+.share-video-ops .btn {
+  text-decoration: none;
+}
+
+.share-error {
+  text-align: center;
+}
+
+.share-video-foot {
+  text-align: center;
+  font-size: 12px;
+  padding: 0 16px 20px;
+  color: #94a3b8;
+}
+
+.share-video-foot a {
+  color: #93c5fd;
+}
+
+/* 长图（导出用，渲染在屏幕外） */
+.poster-offscreen {
+  position: fixed;
+  left: -10000px;
+  top: 0;
+  pointer-events: none;
+}
+
+.poster {
+  width: 750px;
+  background: #f5f8fc;
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+  padding-bottom: 28px;
+}
+
+.poster-hero {
+  position: relative;
+  height: 300px;
+  overflow: hidden;
+}
+
+.poster-hero-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.poster-hero-mask {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(180deg, rgba(10, 25, 50, 0.05) 30%, rgba(10, 25, 50, 0.6) 100%);
+}
+
+.poster-hero-text {
+  position: absolute;
+  left: 36px;
+  right: 36px;
+  bottom: 28px;
+  color: #fff;
+}
+
+.poster-brand {
+  font-size: 18px;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.poster-title {
+  font-size: 40px;
+  font-weight: 800;
+  line-height: 1.2;
+  margin-top: 6px;
+}
+
+.poster-sub {
+  font-size: 20px;
+  margin-top: 8px;
+  opacity: 0.92;
+}
+
+.poster-totals {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin: -24px 28px 0;
+  position: relative;
+}
+
+.poster-totals > div {
+  background: #fff;
+  border-radius: 18px;
+  padding: 16px 18px;
+  box-shadow: 0 4px 18px rgba(18, 38, 77, 0.08);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.poster-totals span {
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.poster-totals b {
+  font-size: 26px;
+  color: var(--text-dark);
+}
+
+.poster-day {
+  margin: 20px 28px 0;
+  background: #fff;
+  border-radius: 20px;
+  padding: 22px 24px 10px;
+  box-shadow: 0 4px 18px rgba(18, 38, 77, 0.05);
+}
+
+.poster-day-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.poster-day-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  height: 26px;
+  padding: 0 8px;
+  border-radius: var(--radius-pill);
+  color: #fff;
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.poster .poster-day-badge {
+  min-width: 52px;
+  height: 34px;
+  font-size: 18px;
+}
+
+.poster-day-title {
+  font-size: 24px;
+  font-weight: 800;
+  color: var(--text-dark);
+}
+
+.poster-day-date {
+  font-size: 18px;
+  color: var(--muted);
+}
+
+.poster-day-weather {
+  margin-left: auto;
+  font-size: 18px;
+}
+
+.poster-day-sum {
+  margin-top: 8px;
+  font-size: 17px;
+  color: var(--muted);
+}
+
+.poster-empty {
+  font-size: 17px;
+  color: var(--muted-light);
+  padding: 10px 0 14px;
+}
+
+.poster-stop {
+  display: flex;
+  gap: 16px;
+  margin-top: 14px;
+}
+
+.poster-stop-rail {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 34px;
+  flex: none;
+}
+
+.poster-stop-no {
+  width: 34px;
+  height: 34px;
+  border: 3px solid;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 16px;
+  background: #fff;
+}
+
+.poster-stop-line {
+  flex: 1;
+  width: 0;
+  border-left: 2px dashed #cbd5e1;
+  margin-top: 4px;
+}
+
+.poster-stop-body {
+  padding-bottom: 6px;
+  min-width: 0;
+}
+
+.poster-stop-name {
+  font-size: 21px;
+  font-weight: 700;
+  color: var(--text-dark);
+  line-height: 34px;
+}
+
+.poster-stop-time {
+  font-size: 16px;
+  color: var(--brand-navy);
+  font-weight: 600;
+}
+
+.poster-stop-leg {
+  margin-top: 6px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.poster-foot {
+  margin-top: 26px;
+  text-align: center;
+  font-size: 16px;
+  color: var(--muted-light);
+}
+
+@media (max-width: 600px) {
+  .supply-panel {
+    margin-left: 0;
+  }
+}
+
+/* 天数卡片头部加了天气后防止标题折行：标题与日期不换行，信息区可收缩 */
+.day-title-info {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.day-title-text,
+.day-date-text {
+  white-space: nowrap;
+  flex: none;
+}
+
+.day-route-summary {
+  min-width: 0;
+  flex: 0 1 auto;
+}
+
+.day-title-info .weather-chip {
+  flex: none;
+}
+
+.day-route-summary {
+  min-width: 64px;
+}
+
+/* 手机上头部放不下天气：只在展开后的当天时间表里显示 */
+@media (max-width: 600px) {
+  .day-title-info .weather-chip {
+    display: none;
+  }
+}

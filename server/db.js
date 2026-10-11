@@ -10,6 +10,7 @@ const DEFAULT_DB = {
   users: [], // { username, passHash, isAdmin, createdAt }
   sessions: {}, // token -> { username, createdAt }
   trips: {}, // username -> StoredTrip[]
+  shares: {}, // shareToken -> { username, tripId, file, mime, size, createdAt }（巡游视频分享，文件在 data/videos）
   config: {
     amapKey: '',
     amapSecurityJsCode: '',
